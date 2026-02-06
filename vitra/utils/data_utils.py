@@ -170,6 +170,7 @@ class PaddedCollatorForHandPrediction:
     padding_side: str = "right"
     pixel_values_dtype: torch.dtype = torch.float32
 
+    # calls MultipleWeightedDataset.__getitem__ -> calls FrameDataset.__getitem__
     def __call__(self, instances: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         # "labels" is not used for hand prediction, but we keep it for compatibility
         input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))

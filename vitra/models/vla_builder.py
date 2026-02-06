@@ -12,6 +12,7 @@ from vitra.utils.data_utils import read_dataset_statistics, GaussianNormalizer
 
 
 def build_vla(configs):
+    # file:///home/haziq/VITRA/vitra/models/vla/vitra_paligemma.py
     model_fn = getattr(vla, configs["vla_name"])
     model = model_fn(
         configs=configs,

@@ -24,7 +24,7 @@ from vitra.datasets.augment_utils import (
 )
 
 from vitra.datasets.interp_utils import interp_mano_state
-from vitra.datasets.video_utils import load_video_decord
+from vitra.datasets.video_utils import load_video_decord, load_video_cv2
 from vitra.datasets.dataset_utils import (
     compute_new_intrinsics_crop, 
     compute_new_intrinsics_resize, 
@@ -66,11 +66,41 @@ class EpisodicDatasetCore(object):
         rel_mode="step",
         load_images=True,
     ):
-        self.video_root = video_root
-        annotation_dict = np.load(annotation_file, allow_pickle=True)
-        self.label_folder = label_folder
-        self.index_frame_pair = annotation_dict['index_frame_pair'].copy()
-        self.index_to_episode_id = annotation_dict['index_to_episode_id'].copy()
+        self.video_root = video_root                                                # ./data/VITRA_1M/Video/Somethingsomething-v2_root
+        annotation_dict = np.load(annotation_file, allow_pickle=True)               # ./data/VITRA_1M/Annotation/ssv2/episode_frame_index.npz
+        self.label_folder = label_folder                                            # ./data/VITRA_1M/Annotation/ssv2/episodic_annotations
+        self.index_frame_pair       = annotation_dict['index_frame_pair'].copy()    # [(episode_id, frame_id), ...] for episode_id, we want to predict the future starting from frame_id        
+        self.index_to_episode_id    = annotation_dict['index_to_episode_id'].copy() # the episode string each index from self.index_frame_pair corresponds to
+        
+        """Debugging print
+        for x in self.index_frame_pair:
+            if x[0] == 0:
+            print(x)
+            [0 0]
+            [0 1]
+            [0 2]
+            [0 3]
+            [0 4]
+            [0 5]
+            [0 6]
+            [0 7]
+            [0 8]
+            [0 9]
+            [ 0 10]
+            [ 0 11]
+            [ 0 12]
+            [ 0 13]
+            [ 0 14]
+            [ 0 15]
+            [ 0 16]
+            [ 0 17]
+            [ 0 18]
+            [ 0 19]
+            [ 0 20]
+            [ 0 21]
+            [ 0 22]
+            [ 0 23]
+        """
 
         if training_path is not None:
             self.training_idx = np.load(training_path, allow_pickle=True)
@@ -125,7 +155,7 @@ class EpisodicDatasetCore(object):
         Returns episode_result (raw dict) and the pre-extracted camera
         extrinsics (R_w2c, t_w2c).  No camera-space MANO tensors are cached.
         """
-        root = self.label_folder
+        root = self.label_folder                            # ./data/VITRA_1M/Annotation/ssv2/episodic_annotations
         epi_path = os.path.join(root, episode_id + '.npy')
         epi = self._load_episode_npy(epi_path)
 
@@ -568,7 +598,7 @@ class EpisodicDatasetCore(object):
         # 1. Load episode dict  +  extrinsics
         # ------------------------------------------------------------------
         epi, R_w2c, t_w2c = self._load_or_cache_episode(episode_id)
-        T  = len(epi['extrinsics']) # 
+        T  = len(epi['extrinsics']) # number of frames in the episode
 
         # ------------------------------------------------------------------
         # 2. Build frame-window indices
@@ -800,7 +830,7 @@ class EpisodicDatasetCore(object):
         else:
             data_id = idx
         corr = self.index_frame_pair[data_id]
-        episode_id = self.index_to_episode_id[corr[0]]
+        episode_id = self.index_to_episode_id[corr[0]]  # corr[0] = episode id, corr[1] = frame_id
         sample = self.get_item_frame(
             episode_id, int(corr[1]),
             action_past_window_size=self.action_past_window_size,
@@ -810,6 +840,32 @@ class EpisodicDatasetCore(object):
             rel_mode=self.rel_mode,  # 'step'
             load_images=self.load_images
         )
+
+        """
+        for x in self.index_frame_pair:
+            if x[0] == 51063:
+                print(x)
+        [51063     0]
+        [51063     1]
+        [51063     2]
+        [51063     3]
+        [51063     4]
+        [51063     5]
+        [51063     6]
+        ...
+        [51063    34]
+        [51063    35]
+        [51063    36]
+        [51063    37]
+        [51063    38]
+        [51063    39]
+        [51063    40]
+        [51063    41]
+        [51063    42]
+        [51063    43]
+        [51063    44]
+        """
+
         return sample
 
 def pad_state_human(

@@ -180,6 +180,20 @@ def experiment(variant):
         target_image_height=variant["train_dataset"].get('target_image_height', 224),
     )
     
+    # # DEBUG: verify batch sizes and shapes (remove after debugging)
+    # if overwatch.rank() == 0:
+    #     print(f"Per-device batch_size={batch_size}, total_batch_size={total_batch_size}")
+    #     print(f"Dataset length: {len(vla_dataset)}")
+    #     print(f"Sampler batch_size: {getattr(batch_sampler, 'batch_size', None)}, num_iters: {len(batch_sampler)}")
+    #     # Create a short DataLoader to fetch one batch (this will load data so may be slow)
+    #     from torch.utils.data import DataLoader
+    #     dl = DataLoader(vla_dataset, batch_sampler=batch_sampler, collate_fn=collator)
+    #     batch = next(iter(dl))
+    #     print("Batch keys:", list(batch.keys()))
+    #     print("pixel_values shape:", batch["pixel_values"].shape)
+    #     print("input_ids shape:", batch["input_ids"].shape)
+    #     print("actions shape:", batch["actions"].shape)
+
     # === Training Strategy Setup ===
     # Initialize FSDP (Fully Sharded Data Parallel) training strategy
     training_strategy = VLAFSDPStrategy(

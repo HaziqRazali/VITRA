@@ -66,7 +66,14 @@ class TimestepEmbedder(nn.Module):
         return embedding
 
     def forward(self, t):
-        t_freq = self.timestep_embedding(t, self.frequency_embedding_size).to(next(self.mlp.parameters()).dtype)
+        # Guard against cases where `self.mlp.parameters()` yields no parameters
+        # (can happen under certain FSDP wrapping configurations). Fall back to
+        # the default torch dtype if no parameter is available.
+        try:
+            target_dtype = next(self.mlp.parameters()).dtype
+        except StopIteration:
+            target_dtype = torch.get_default_dtype()
+        t_freq = self.timestep_embedding(t, self.frequency_embedding_size).to(target_dtype)
         t_emb = self.mlp(t_freq)
         return t_emb
 
