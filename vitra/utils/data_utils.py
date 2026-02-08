@@ -273,37 +273,49 @@ def read_dataset_statistics(statistics_path: str, default_value=1e-4) -> dict:
     with open(statistics_path, 'r') as file:
         dataset_stats = json.load(file)
         
-        # Assert that right hand statistics must exist
-        assert 'state_right' in dataset_stats, "Right hand statistics must exist"
-        
-        # Get right hand statistics
-        state_right_mean = np.array(dataset_stats['state_right']['mean'])
-        state_right_std = np.array(dataset_stats['state_right']['std'])
-        action_right_mean = np.array(dataset_stats['action_right']['mean'])
-        action_right_std = np.array(dataset_stats['action_right']['std'])
-        
-        # For left hand, use right hand dimensions but fill with default_value if not available
-        if 'state_left' in dataset_stats:
-            state_left_mean = np.array(dataset_stats['state_left']['mean'])
-            state_left_std = np.array(dataset_stats['state_left']['std'])
-            action_left_mean = np.array(dataset_stats['action_left']['mean'])
-            action_left_std = np.array(dataset_stats['action_left']['std'])
+        if 'state_right' not in dataset_stats:
+
+            body_pose_mean = np.array(dataset_stats['body_pose']['mean'])
+            body_pose_std  = np.array(dataset_stats['body_pose']['std'])
+
+            data_statistics = {
+                'body_pose_mean': body_pose_mean,
+                'body_pose_std': body_pose_std,
+            }
+
         else:
-            state_left_mean = np.full_like(state_right_mean, default_value)
-            state_left_std = np.full_like(state_right_std, default_value)
-            action_left_mean = np.full_like(action_right_mean, default_value)
-            action_left_std = np.full_like(action_right_std, default_value)
         
-        data_statistics = {
-            'state_right_mean': state_right_mean,
-            'state_right_std': state_right_std,
-            'action_right_mean': action_right_mean,
-            'action_right_std': action_right_std,
-            'state_left_mean': state_left_mean,
-            'state_left_std': state_left_std,
-            'action_left_mean': action_left_mean,
-            'action_left_std': action_left_std,
-        }
+            # Assert that right hand statistics must exist
+            assert 'state_right' in dataset_stats, "Right hand statistics must exist"
+            
+            # Get right hand statistics
+            state_right_mean = np.array(dataset_stats['state_right']['mean'])
+            state_right_std = np.array(dataset_stats['state_right']['std'])
+            action_right_mean = np.array(dataset_stats['action_right']['mean'])
+            action_right_std = np.array(dataset_stats['action_right']['std'])
+            
+            # For left hand, use right hand dimensions but fill with default_value if not available
+            if 'state_left' in dataset_stats:
+                state_left_mean = np.array(dataset_stats['state_left']['mean'])
+                state_left_std = np.array(dataset_stats['state_left']['std'])
+                action_left_mean = np.array(dataset_stats['action_left']['mean'])
+                action_left_std = np.array(dataset_stats['action_left']['std'])
+            else:
+                state_left_mean = np.full_like(state_right_mean, default_value)
+                state_left_std = np.full_like(state_right_std, default_value)
+                action_left_mean = np.full_like(action_right_mean, default_value)
+                action_left_std = np.full_like(action_right_std, default_value)
+            
+            data_statistics = {
+                'state_right_mean': state_right_mean,
+                'state_right_std': state_right_std,
+                'action_right_mean': action_right_mean,
+                'action_right_std': action_right_std,
+                'state_left_mean': state_left_mean,
+                'state_left_std': state_left_std,
+                'action_left_mean': action_left_mean,
+                'action_left_std': action_left_std,
+            }
     return data_statistics
 
 class GaussianNormalizer:
@@ -320,11 +332,20 @@ class GaussianNormalizer:
                 'action_left_mean', 'action_left_std', 'action_right_mean', 'action_right_std'
                 All values are numpy arrays.
         """
-        # Concatenate left and right statistics for vectorized operations
-        self.state_mean = np.concatenate([data_statistics['state_left_mean'], data_statistics['state_right_mean']])
-        self.state_std = np.concatenate([data_statistics['state_left_std'], data_statistics['state_right_std']])
-        self.action_mean = np.concatenate([data_statistics['action_left_mean'], data_statistics['action_right_mean']])
-        self.action_std = np.concatenate([data_statistics['action_left_std'], data_statistics['action_right_std']])
+
+        if "state_right_mean" not in data_statistics:
+
+            # Body pose dataset
+            self.state_mean = data_statistics['body_pose_mean']
+            self.state_std = data_statistics['body_pose_std']
+
+        else:
+
+            # Concatenate left and right statistics for vectorized operations
+            self.state_mean = np.concatenate([data_statistics['state_left_mean'], data_statistics['state_right_mean']])
+            self.state_std = np.concatenate([data_statistics['state_left_std'], data_statistics['state_right_std']])
+            self.action_mean = np.concatenate([data_statistics['action_left_mean'], data_statistics['action_right_mean']])
+            self.action_std = np.concatenate([data_statistics['action_left_std'], data_statistics['action_right_std']])
 
     # -----------------------------
     # State normalization

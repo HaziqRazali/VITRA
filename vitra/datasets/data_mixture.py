@@ -18,4 +18,7 @@ HAND_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
     "ssv2": [
         ('ssv2', 1.0)
     ],
+    "motionx": [
+        ('idea400', 1.0 )
+    ],
 }

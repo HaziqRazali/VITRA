@@ -72,6 +72,11 @@ class FrameDataset(Dataset):
             label_folder = os.path.join(dataset_folder, "Annotation/ego4d_other/episodic_annotations")
             statistics_path = os.path.join(dataset_folder, "Annotation/statistics/ego4d_other_angle_statistics.json")
             video_root = os.path.join(dataset_folder, 'Video/Ego4D_root')
+        elif dataset_name == 'idea400':
+            annotation_file = os.path.join(dataset_folder, "Annotation/idea400/episode_frame_index.npz")
+            label_folder    = os.path.join(dataset_folder, "Annotation/idea400/episodic_annotations")
+            statistics_path = os.path.join(dataset_folder, "Annotation/statistics/idea400_statistics.json")
+            video_root      = os.path.join(dataset_folder, 'Video/idea400')
         elif dataset_name == 'robo_dataset':
             root_dir = os.path.join(dataset_folder, "TeleData")
             statistics_path = os.path.join(dataset_folder, "teledata_statistics.json")
@@ -105,7 +110,7 @@ class FrameDataset(Dataset):
                 image_future_window_size=self.image_future_window_size,
                 rel_mode=self.rel_mode,  # 'step'
                 load_images=self.load_images,
-                target_image_height = target_image_height
+                target_image_height = target_image_height,
             )
         else:
             self.episodic_dataset_core = RoboDatasetCore(
@@ -125,6 +130,7 @@ class FrameDataset(Dataset):
 
     def __getitem__(self, idx):
 
+        # it enters file:///home/haziq/VITRA/vitra/datasets/human_dataset.py EpisodicDatasetCore.__getitem__()
         sample = self.episodic_dataset_core.__getitem__(idx)
         sample = self.episodic_dataset_core.transform_trajectory(sample, self.normalization) if self.load_images else sample
         return self.post_transform(sample) if self.load_images else sample
@@ -206,26 +212,41 @@ class MultipleWeightedDataset(Dataset):
 
     @staticmethod
     def save_mixed_dataset_statistics(dataset_folder, data_mix, action_type, data_statistics):
-        # Convert numpy arrays to lists for JSON serialization
-        data_statistics_json = {
-            'dataset_name': f"{data_mix}_{action_type}",
-            'state_left': {
-            'mean': data_statistics['state_left_mean'].tolist(),
-            'std': data_statistics['state_left_std'].tolist()
-            },
-            'action_left': {
-            'mean': data_statistics['action_left_mean'].tolist(),
-            'std': data_statistics['action_left_std'].tolist()
-            },
-            'state_right': {
-            'mean': data_statistics['state_right_mean'].tolist(),
-            'std': data_statistics['state_right_std'].tolist()
-            },
-            'action_right': {
-            'mean': data_statistics['action_right_mean'].tolist(),
-            'std': data_statistics['action_right_std'].tolist()
+
+        # means its a body pose dataset
+        if "state_right_mean" not in data_statistics:
+
+            data_statistics_json = {
+                'dataset_name': f"{data_mix}_{action_type}",
+                'body_pose': {
+                'mean': data_statistics['body_pose_mean'].tolist(),
+                'std': data_statistics['body_pose_std'].tolist()
+                },
             }
-        }
+
+        else:
+
+            # Convert numpy arrays to lists for JSON serialization
+            data_statistics_json = {
+                'dataset_name': f"{data_mix}_{action_type}",
+                'state_left': {
+                'mean': data_statistics['state_left_mean'].tolist(),
+                'std': data_statistics['state_left_std'].tolist()
+                },
+                'action_left': {
+                'mean': data_statistics['action_left_mean'].tolist(),
+                'std': data_statistics['action_left_std'].tolist()
+                },
+                'state_right': {
+                'mean': data_statistics['state_right_mean'].tolist(),
+                'std': data_statistics['state_right_std'].tolist()
+                },
+                'action_right': {
+                'mean': data_statistics['action_right_mean'].tolist(),
+                'std': data_statistics['action_right_std'].tolist()
+                }
+            }
+
         # Save to local file
         with open(os.path.join(dataset_folder, f"{data_mix}_{action_type}_weighted_statistics.json"), "w") as f:
             json.dump(data_statistics_json, f, indent=2)

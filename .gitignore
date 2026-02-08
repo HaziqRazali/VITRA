@@ -193,3 +193,4 @@ benchmark*/
 
 .DS_Store
 
+scripts/run_human_pretrain.sh

@@ -535,6 +535,8 @@ class VLAFSDPStrategy(TrainingStrategy):
                 #     - intrinsics: [batch_size, intrinsic_dim] - camera intrinsic matrices
                 #     - dataset_names: List[str] - optional dataset identifiers for each sample
                 #
+
+                # it first enters file:///home/haziq/VITRA/vitra/datasets/dataset.py FrameDataset.__getitem__()
                 for batch_idx, batch in enumerate(dataloader):
                     # Note that we'll unpack batch (and let AMP/FSDP do its thing) in the VLM.forward() call
                     #   => Basically, if we're using mixed precision (or not), autocast()/FSDP will move to device!
