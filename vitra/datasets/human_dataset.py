@@ -218,7 +218,7 @@ class EpisodicDatasetCore(object):
         # 4. TRANSFORM WORLD SPACE → CAMERA SPACE
         # ============================================================
 
-        R_cam_extend = R_w2c[idx_anchor] @ np.eye(3)[None,...]  # (W+1, 3, 3)
+        R_cam_extend = R_w2c[idx_anchor] #@ np.eye(3)[None,...]  # (W+1, 3, 3)
 
         t_cam_extend = t_w2c[idx_anchor]  # (W+1, 3)
 
@@ -468,12 +468,12 @@ class EpisodicDatasetCore(object):
                     "keypoints " → root keypoints (21x3=63)
         """
 
-        if "smplx" in win:
+        if "smplx_euler" in win:
 
             R_cur, t_cur            = win['R_cam'],        win['t_cam']
             R_nxt, t_nxt            = win['R_cam_next'],   win['t_cam_next']
-            smplx_cur, smplx_nxt    = win['smplx_curr'],   win['smplx_next']
-            smplx_next              = win['smplx_euler_next']
+            P_cur, P_nxt    = win['smplx_P'],   win['smplx_P_next']
+            pose_next              = win['smplx_euler_next']
             kept, kept_n            = win['kept'],         win['kept_next']
             W = len(t_cur)
 
@@ -481,7 +481,7 @@ class EpisodicDatasetCore(object):
             if action_type == "keypoints":
                 abs_next = kpoints_root_next.reshape(W, -1)
             elif action_type == "angle":
-                abs_next = smplx_next
+                abs_next = pose_next
             action_abs = np.concatenate(
                 [t_nxt,
                 self._mat2euler(R_nxt),
@@ -525,19 +525,19 @@ class EpisodicDatasetCore(object):
 
         else:
 
-            R_cur, t_cur  = win['R_cam'],        win['t_cam']
-            R_nxt, t_nxt  = win['R_cam_next'],   win['t_cam_next']
-            P_cur, P_nxt  = win['hand_P'],       win['hand_P_next']
-            pose_next     = win['pose_euler_next']
-            kpoints_root_next = win['joints_manospace_next']
-            kept, kept_n  = win['kept'],         win['kept_next']
-            W = len(t_cur)
+            R_cur, t_cur  = win['R_cam'],        win['t_cam']       # [16, 3, 3] [16, 3]
+            R_nxt, t_nxt  = win['R_cam_next'],   win['t_cam_next']  # [16, 3, 3] [16, 3]
+            P_cur, P_nxt  = win['hand_P'],       win['hand_P_next'] # [16, 15, 3, 3] [16, 15, 3, 3]
+            pose_next     = win['pose_euler_next']                  # [16, 45]
+            kpoints_root_next = win['joints_manospace_next']        # [16, 21, 3]
+            kept, kept_n  = win['kept'], win['kept_next']           # [16] [16]
+            W = len(t_cur)                                          # 16
 
             # absolute pose of t+1
             if action_type == "keypoints":
                 abs_next = kpoints_root_next.reshape(W, -1)
             elif action_type == "angle":
-                abs_next = pose_next
+                abs_next = pose_next    # [16, 45]
             action_abs = np.concatenate(
                 [t_nxt,
                 self._mat2euler(R_nxt),
@@ -853,6 +853,8 @@ class EpisodicDatasetCore(object):
         # 1. Load episode dict  +  extrinsics
         # https://github.com/microsoft/VITRA/blob/main/data/data.md#4-metadata-structure
         # ------------------------------------------------------------------
+        
+        # R_w2c [T,3,3], t_w2c [T,3]
         epi, R_w2c, t_w2c = self._load_or_cache_episode(episode_id)
         T  = len(epi['extrinsics']) # number of frames in the episode
 
@@ -958,7 +960,7 @@ class EpisodicDatasetCore(object):
                 result_dict['image_mask'] = image_mask          # (W,) bool
 
         else:
-            
+
             main_type = epi['anno_type']
             sub_type = 'right' if main_type == 'left' else 'left'
 
