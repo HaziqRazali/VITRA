@@ -218,9 +218,9 @@ class EpisodicDatasetCore(object):
         # 4. TRANSFORM WORLD SPACE → CAMERA SPACE
         # ============================================================
 
-        R_cam_extend = R_w2c[idx_anchor] #@ np.eye(3)[None,...]  # (W+1, 3, 3)
+        R_cam_extend = R_w2c[0:W+1] #@ np.eye(3)[None,...]  # (W+1, 3, 3)
 
-        t_cam_extend = t_w2c[idx_anchor]  # (W+1, 3)
+        t_cam_extend = t_w2c[0:W+1]  # (W+1, 3)
 
         # ============================================================
         # 5. CONVERT SMPLX POSES FROM EULER ANGLES to ROTATION MATRICES (BATCHED)
@@ -245,11 +245,11 @@ class EpisodicDatasetCore(object):
         kept = kept_extend[:-1]                         # (W,)
 
         # Next frame tensors (last W frames: indices 1 to W, shifted by 1 timestep)
-        R_cam_next = R_cam_extend[1:]                          # (W, 3, 3)
-        t_cam_next = t_cam_extend[1:]                          # (W, 3)
-        smplx_euler_next = smplx_extend[1:]                    # (W, 63)
-        smplx_P_next = smplx_P_extend[1:]                   # (W, 21, 3, 3)
-        kept_next = kept_extend[1:]                            # (W,)
+        R_cam_next = R_cam_extend[1:]                   # (W, 3, 3)
+        t_cam_next = t_cam_extend[1:]                   # (W, 3)
+        smplx_euler_next = smplx_extend[1:]             # (W, 63)
+        smplx_P_next = smplx_P_extend[1:]               # (W, 21, 3, 3)
+        kept_next = kept_extend[1:]                     # (W,)
 
         # ============================================================
         # 9. RETURN PAIRED CURRENT/NEXT REPRESENTATIONS
@@ -363,7 +363,6 @@ class EpisodicDatasetCore(object):
         # Wrist translation: t_cam = R_world2cam @ t_mano_world + t_world2cam
         t_cam_extend  = (R_w2c[idx_anchor] @ t_mano_extend[..., None])[..., 0] + t_w2c[idx_anchor]  # (W+1, 3)
         
-
         # ============================================================
         # 5. CONVERT FINGER POSES TO EULER ANGLES (BATCHED)
         # ============================================================
@@ -371,8 +370,7 @@ class EpisodicDatasetCore(object):
         # Input: hand_P_extend (W+1, 15, 3, 3) → flatten to (W+1*15, 3, 3)
         # Convert each 3×3 rotation → 3 Euler angles (xyz convention)
         # Output: (W+1, 45) where 45 = 15 joints × 3 angles
-        pose_euler_extend  = R.from_matrix(hand_P_extend.reshape(-1,3,3))     \
-                            .as_euler('xyz', degrees=False).reshape(-1,45)
+        pose_euler_extend  = R.from_matrix(hand_P_extend.reshape(-1,3,3)).as_euler('xyz', degrees=False).reshape(-1,45) # [W+1, 45]
         
         # ============================================================
         # 6. TRANSFORM KEYPOINTS TO MANO CANONICAL SPACE (BATCHED)
@@ -382,9 +380,7 @@ class EpisodicDatasetCore(object):
         # Formula: joints_mano = R_mano^T @ (joints_world - t_mano)
         # - First: translate keypoints by negative wrist translation
         # - Then: apply inverse wrist rotation (R^T) to align with MANO coordinate frame
-        joints_manospace_extend = (R_mano_extend.transpose(0, 2, 1) @ 
-                                  (joints_worldspace_extend.transpose(0, 2, 1) - t_mano_extend[..., None])
-                                  ).transpose(0,2,1)  # (W+1, 21, 3)
+        joints_manospace_extend = (R_mano_extend.transpose(0, 2, 1) @ (joints_worldspace_extend.transpose(0, 2, 1) - t_mano_extend[..., None])).transpose(0,2,1)  # (W+1, 21, 3)
 
         # ============================================================
         # 7. OPTIONAL TEMPORAL UPSAMPLING
@@ -399,8 +395,7 @@ class EpisodicDatasetCore(object):
                                  upsample_factor, method="pchip")
 
             # Recompute Euler angles after interpolation
-            pose_euler_extend = R.from_matrix(hand_P_extend.reshape(-1,3,3))     \
-                            .as_euler('xyz', degrees=False).reshape(-1,45)
+            pose_euler_extend = R.from_matrix(hand_P_extend.reshape(-1,3,3)).as_euler('xyz', degrees=False).reshape(-1,45)
             
             # Truncate back to exactly W+1 frames (interpolation may create more)
             R_cam_extend = R_cam_extend[:W+1]
@@ -470,12 +465,12 @@ class EpisodicDatasetCore(object):
 
         if "smplx_euler" in win:
 
-            R_cur, t_cur            = win['R_cam'],        win['t_cam']
-            R_nxt, t_nxt            = win['R_cam_next'],   win['t_cam_next']
-            P_cur, P_nxt    = win['smplx_P'],   win['smplx_P_next']
-            pose_next              = win['smplx_euler_next']
-            kept, kept_n            = win['kept'],         win['kept_next']
-            W = len(t_cur)
+            R_cur, t_cur = win['R_cam'],        win['t_cam']        # [16, 3, 3]        [16, 3]
+            R_nxt, t_nxt = win['R_cam_next'],   win['t_cam_next']   # [16, 3, 3]        [16, 3]
+            P_cur, P_nxt = win['smplx_P'],      win['smplx_P_next'] # [16, 21, 3, 3]    [16, 21, 3, 3]
+            pose_next    = win['smplx_euler_next']                  # [16, 63]
+            kept, kept_n = win['kept'],         win['kept_next']    # [16] [16]
+            W = len(t_cur)                                          # 16
 
             # absolute pose of t+1
             if action_type == "keypoints":
@@ -491,10 +486,10 @@ class EpisodicDatasetCore(object):
 
             # choose relative formulation
             if rel_mode == "step":
-                t_rel = t_nxt - t_cur
-                R_rel = R_nxt @ R_cur.transpose(0,2,1)
-                P_rel = np.matmul(P_nxt, P_cur.transpose(0,1,3,2))
-                valid = kept & kept_n
+                t_rel = t_nxt - t_cur                               # [16, 3]
+                R_rel = R_nxt @ R_cur.transpose(0,2,1)              # [16, 3, 3]
+                P_rel = np.matmul(P_nxt, P_cur.transpose(0,1,3,2))  # [16, 21, 3, 3]
+                valid = kept & kept_n                               # [16]
 
             elif rel_mode == "anchor":
                 t_anchor  = t_cur[anchor_idx]
@@ -510,24 +505,23 @@ class EpisodicDatasetCore(object):
             else:
                 raise ValueError('rel_mode must be "step" or "anchor"')
 
-            pose_rel = R.from_matrix(P_rel.reshape(-1,3,3)) \
-                        .as_euler('xyz',False).reshape(W,63)
+            pose_rel = R.from_matrix(P_rel.reshape(-1,3,3)).as_euler('xyz',False).reshape(W,63) # [16, 63]
 
             action_rel = np.concatenate(
                 [t_rel,
                 self._mat2euler(R_rel),
                 pose_rel],
-                axis=-1).astype(np.float32)
+                axis=-1).astype(np.float32) # [16, 69]
 
-            action_abs[~valid] = 0.0
-            action_rel[~valid] = 0.0
+            action_abs[~valid] = 0.0    # [16, 69]
+            action_rel[~valid] = 0.0    # [16, 69]
             return action_abs, action_rel, valid
 
         else:
 
-            R_cur, t_cur  = win['R_cam'],        win['t_cam']       # [16, 3, 3] [16, 3]
-            R_nxt, t_nxt  = win['R_cam_next'],   win['t_cam_next']  # [16, 3, 3] [16, 3]
-            P_cur, P_nxt  = win['hand_P'],       win['hand_P_next'] # [16, 15, 3, 3] [16, 15, 3, 3]
+            R_cur, t_cur  = win['R_cam'],        win['t_cam']       # [16, 3, 3]        [16, 3]
+            R_nxt, t_nxt  = win['R_cam_next'],   win['t_cam_next']  # [16, 3, 3]        [16, 3]
+            P_cur, P_nxt  = win['hand_P'],       win['hand_P_next'] # [16, 15, 3, 3]    [16, 15, 3, 3]
             pose_next     = win['pose_euler_next']                  # [16, 45]
             kpoints_root_next = win['joints_manospace_next']        # [16, 21, 3]
             kept, kept_n  = win['kept'], win['kept_next']           # [16] [16]
@@ -542,15 +536,15 @@ class EpisodicDatasetCore(object):
                 [t_nxt,
                 self._mat2euler(R_nxt),
                 abs_next],
-                axis=-1).astype(np.float32)
-            action_abs = action_abs.reshape(W, -1)
+                axis=-1).astype(np.float32)         # [16, 51]
+            action_abs = action_abs.reshape(W, -1)  # [16, 51]
 
             # choose relative formulation
             if rel_mode == "step":
-                t_rel = t_nxt - t_cur
-                R_rel = R_nxt @ R_cur.transpose(0,2,1)
-                P_rel = np.matmul(P_nxt, P_cur.transpose(0,1,3,2))
-                valid = kept & kept_n
+                t_rel = t_nxt - t_cur                               # [16, 3]
+                R_rel = R_nxt @ R_cur.transpose(0,2,1)              # [16, 3, 3]
+                P_rel = np.matmul(P_nxt, P_cur.transpose(0,1,3,2))  # [16, 15, 3, 3]
+                valid = kept & kept_n                               # [16]
 
             elif rel_mode == "anchor":
                 t_anchor  = t_cur[anchor_idx]
@@ -566,17 +560,16 @@ class EpisodicDatasetCore(object):
             else:
                 raise ValueError('rel_mode must be "step" or "anchor"')
 
-            pose_rel = R.from_matrix(P_rel.reshape(-1,3,3)) \
-                        .as_euler('xyz',False).reshape(W,45)
+            pose_rel = R.from_matrix(P_rel.reshape(-1,3,3)).as_euler('xyz',False).reshape(W,45) # [16, 45]
 
             action_rel = np.concatenate(
                 [t_rel,
                 self._mat2euler(R_rel),
                 pose_rel],
-                axis=-1).astype(np.float32)
+                axis=-1).astype(np.float32) # [16, 51]
 
-            action_abs[~valid] = 0.0
-            action_rel[~valid] = 0.0
+            action_abs[~valid] = 0.0 # [16, 51]
+            action_rel[~valid] = 0.0 # [16, 51]
             return action_abs, action_rel, valid
 
     def _window_indices(self, frame_id, past, future, start, end):
@@ -870,6 +863,7 @@ class EpisodicDatasetCore(object):
         W   = len(idx_win) # W = 16
         
         if "smplx_params" in epi:
+
             main_type   = None
             sub_type    = None
 
@@ -887,22 +881,22 @@ class EpisodicDatasetCore(object):
             )
             idx_center = action_past_window_size          # local index of t0 in window
 
-            abs_L, rel_L, msk_L = self._make_action_window_vec(
+            abs_body, rel_body, msk_body = self._make_action_window_vec(
                 win_body,  anchor_idx=idx_center, rel_mode=rel_mode, action_type=self.action_type
-            ) 
+            ) # [16, 69] [16, 69] [16,]
 
-            action_abs = np.concatenate([abs_L, abs_R], axis=1)   # (W,action_dim)
-            action_rel = np.concatenate([rel_L, rel_R], axis=1)   # (W,102)
-            action_mask = np.stack([msk_L, msk_R], axis=1)        # (W,2)
+            action_abs  = abs_body #np.concatenate([abs_L, abs_R], axis=1)  # (W,action_dim)
+            action_rel  = rel_body #np.concatenate([rel_L, rel_R], axis=1)  # (W,102)
+            action_mask = msk_body #np.stack([msk_L, msk_R], axis=1)        # (W,2)
 
             cur = self._pack_state(win_body['R_cam'],
                         win_body['t_cam'],
                         win_body['smplx_euler'] if self.action_type=='angle' else win_body['smplx_curr'].reshape(W, -1),
-                        idx_center)
+                        idx_center) # [69]
 
             betas = []
-            current_state = np.concatenate([cur, betas])          # 
-            current_state_mask  = np.array([win_body['kept'][idx_center]])
+            current_state = np.concatenate([cur, betas])                    # [69]
+            current_state_mask  = np.array([win_body['kept'][idx_center]])  # [1]
 
             # ------------------------------------------------------------------
             # 5. RGB window
@@ -991,39 +985,39 @@ class EpisodicDatasetCore(object):
                 epi['right'], R_w2c, t_w2c, idx_win_right, frame_id, anchor_frame=True, 
                 oob=oob_right, start=start_right, end=end_right, upsample_factor=self.upsample_factor
             )
-            idx_center = action_past_window_size          # local index of t0 in window
+            idx_center = action_past_window_size # 0, local index of t0 in window
             
             # rel_mode: "step"  or  "anchor" / action_type: "angle" or "keypoints"
             # step: relative to previous frame, anchor: relative to t0
             abs_L, rel_L, msk_L = self._make_action_window_vec(
                 win_left,  anchor_idx=idx_center, rel_mode=rel_mode, action_type=self.action_type
-            ) 
+            ) # [16, 51] [16, 51] [16,]
 
             abs_R, rel_R, msk_R = self._make_action_window_vec(
                 win_right, anchor_idx=idx_center, rel_mode=rel_mode, action_type=self.action_type
-            ) 
+            ) # [16, 51] [16, 51] [16,]
 
-            action_abs = np.concatenate([abs_L, abs_R], axis=1)   # (W,action_dim)
+            action_abs = np.concatenate([abs_L, abs_R], axis=1)   # (W,102)
             action_rel = np.concatenate([rel_L, rel_R], axis=1)   # (W,102)
             action_mask = np.stack([msk_L, msk_R], axis=1)        # (W,2)
 
             cur_L = self._pack_state(win_left['R_cam'],
                         win_left['t_cam'],
                         win_left['pose_euler'] if self.action_type=='angle' else win_left['joints_manospace'].reshape(W, -1),
-                        idx_center)
+                        idx_center) # [51]
 
             cur_R = self._pack_state(win_right['R_cam'],
                                 win_right['t_cam'],
                                 win_right['pose_euler'] if self.action_type=='angle' else win_right['joints_manospace'].reshape(W, -1),
-                                idx_center)
+                                idx_center) # [51]
 
-            betas_L = epi['left']['beta']
-            betas_R = epi['right']['beta']
+            betas_L = epi['left']['beta']   # [10]
+            betas_R = epi['right']['beta']  # [10]
 
-            current_state       = np.concatenate([cur_L, betas_L, cur_R, betas_R])          # 2 * (6+action_dim+10,)
+            current_state       = np.concatenate([cur_L, betas_L, cur_R, betas_R]) # 2 * (6+action_dim+10,)
             # current_state_mask  = np.array([msk_L[idx_center],
             #                                 msk_R[idx_center]])
-            current_state_mask  = np.array([win_left['kept'][idx_center], win_right['kept'][idx_center]])
+            current_state_mask  = np.array([win_left['kept'][idx_center], win_right['kept'][idx_center]]) # [2]
 
             # ------------------------------------------------------------------
             # 5. RGB window
@@ -1034,9 +1028,9 @@ class EpisodicDatasetCore(object):
                     frame_id,
                     image_past_window_size,
                     image_future_window_size
-                )
-                H = image_list[0].shape[0]
-                W = image_list[0].shape[1]
+                ) # len(image_list) = 1
+                H = image_list[0].shape[0] # 240
+                W = image_list[0].shape[1] # 360
             else:
                 image_list = None
                 image_mask = None
@@ -1045,8 +1039,8 @@ class EpisodicDatasetCore(object):
             # ------------------------------------------------------------------
             # 6. Calculate New_intrinsics
             # ------------------------------------------------------------------
-            dataset_name = episode_id.split('_')[0]
-            intrinsics = epi['intrinsics']
+            dataset_name = episode_id.split('_')[0] # somethingsomethingv2
+            intrinsics = epi['intrinsics']          # [3, 3]
 
             if dataset_name == 'EgoExo4D':
                 # For EgoExo4D, the fisheye camera images contain black borders after undistortion.
@@ -1056,7 +1050,7 @@ class EpisodicDatasetCore(object):
                 new_intrinsics = compute_new_intrinsics_crop(intrinsics, 1408, 256/448*1408, H)
                 
             else:
-                new_intrinsics = compute_new_intrinsics_resize(intrinsics, (H, W))
+                new_intrinsics = compute_new_intrinsics_resize(intrinsics, (H, W)) # [3, 3]
 
             # ------------------------------------------------------------------
             # 7. Do augmentation
@@ -1101,18 +1095,18 @@ class EpisodicDatasetCore(object):
                     current_state_mask = np.array([False, False])
                     current_state[:] = 0.0
 
-            fov = calculate_fov( 2 * new_intrinsics[1][2], 2 * new_intrinsics[0][2], new_intrinsics)
+            fov = calculate_fov( 2 * new_intrinsics[1][2], 2 * new_intrinsics[0][2], new_intrinsics) # [2]
 
             if self.use_rel:
                 action_list = action_rel
             else:
                 # use abs action for hand pose only
-                rel_L = action_rel[:, :action_rel.shape[1]//2]
-                rel_R = action_rel[:, action_rel.shape[1]//2:]
-                abs_L = action_abs[:, :action_abs.shape[1]//2]
-                abs_R = action_abs[:, action_abs.shape[1]//2:]
+                rel_L = action_rel[:, :action_rel.shape[1]//2] # [16, 51]
+                rel_R = action_rel[:, action_rel.shape[1]//2:] # [16, 51]
+                abs_L = action_abs[:, :action_abs.shape[1]//2] # [16, 51]
+                abs_R = action_abs[:, action_abs.shape[1]//2:] # [16, 51]
 
-                action_list = np.concatenate([rel_L[:, :6], abs_L[:, 6:], rel_R[:, :6], abs_R[:, 6:]], axis=1)
+                action_list = np.concatenate([rel_L[:, :6], abs_L[:, 6:], rel_R[:, :6], abs_R[:, 6:]], axis=1) # [16, 102]
 
             # ------------------------------------------------------------------
             # 8. Return to caller
