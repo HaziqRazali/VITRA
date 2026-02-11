@@ -212,38 +212,48 @@ class MultipleWeightedDataset(Dataset):
 
     @staticmethod
     def save_mixed_dataset_statistics(dataset_folder, data_mix, action_type, data_statistics):
+        """
+        Save mixed dataset statistics to JSON file.
+        
+        Handles three formats:
+        1. SMPLX: state_mean/action_mean (single body)
+        2. MANO: state_left_mean/state_right_mean (dual hands)
+        """
 
-        # means its a body pose dataset
-        if "state_right_mean" not in data_statistics:
-
+        # Check format: SMPLX (state_mean/action_mean)
+        if "state_mean" in data_statistics and "action_mean" in data_statistics:
             data_statistics_json = {
                 'dataset_name': f"{data_mix}_{action_type}",
-                'body_pose': {
-                'mean': data_statistics['body_pose_mean'].tolist(),
-                'std': data_statistics['body_pose_std'].tolist()
+                'state': {
+                    'mean': data_statistics['state_mean'].tolist(),
+                    'std': data_statistics['state_std'].tolist()
+                },
+                'action': {
+                    'mean': data_statistics['action_mean'].tolist(),
+                    'std': data_statistics['action_std'].tolist()
                 },
             }
 
-        else:
-
+        # Check format: MANO (dual hands)
+        elif "state_right_mean" in data_statistics:
             # Convert numpy arrays to lists for JSON serialization
             data_statistics_json = {
                 'dataset_name': f"{data_mix}_{action_type}",
                 'state_left': {
-                'mean': data_statistics['state_left_mean'].tolist(),
-                'std': data_statistics['state_left_std'].tolist()
+                    'mean': data_statistics['state_left_mean'].tolist(),
+                    'std': data_statistics['state_left_std'].tolist()
                 },
                 'action_left': {
-                'mean': data_statistics['action_left_mean'].tolist(),
-                'std': data_statistics['action_left_std'].tolist()
+                    'mean': data_statistics['action_left_mean'].tolist(),
+                    'std': data_statistics['action_left_std'].tolist()
                 },
                 'state_right': {
-                'mean': data_statistics['state_right_mean'].tolist(),
-                'std': data_statistics['state_right_std'].tolist()
+                    'mean': data_statistics['state_right_mean'].tolist(),
+                    'std': data_statistics['state_right_std'].tolist()
                 },
                 'action_right': {
-                'mean': data_statistics['action_right_mean'].tolist(),
-                'std': data_statistics['action_right_std'].tolist()
+                    'mean': data_statistics['action_right_mean'].tolist(),
+                    'std': data_statistics['action_right_std'].tolist()
                 }
             }
 

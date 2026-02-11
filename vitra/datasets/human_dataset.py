@@ -583,18 +583,21 @@ class EpisodicDatasetCore(object):
         return win.clip(start, end), oob
 
     def _resolve_video_path(self, dataset_name: str = None, video_name: str = None, part_index: int = None) -> str:
+        
         if dataset_name=='Ego4D':
             if self.clip_len is not None:
                 video_path = os.path.join(self.video_root, video_name + '_part' + str(part_index+1) +'.mp4')
             else:
                 video_path = os.path.join(self.video_root, video_name +'.mp4')
             return video_path
+        
         elif dataset_name=='EgoExo4D':
             if self.clip_len is not None:
                 video_path = os.path.join(self.video_root, video_name +'_part' + str(part_index+1) +'.mp4')
             else:
                 video_path = os.path.join(self.video_root, video_name +'.mp4')
             return video_path
+        
         elif dataset_name == 'epic':
             video_id = video_name.split('_')[0]
             if self.clip_len is not None:
@@ -602,12 +605,21 @@ class EpisodicDatasetCore(object):
             else:
                 video_path = os.path.join(self.video_root, video_name+ '.MP4')
             return video_path
+        
         elif dataset_name == 'somethingsomethingv2':
             if self.clip_len is not None:
                 video_path = os.path.join(self.video_root, video_name+ '_part' + str(part_index+1) + '.mp4')
             else:
                 video_path = os.path.join(self.video_root, video_name+'.webm')
             return video_path
+
+        elif dataset_name == 'idea400':
+            if self.clip_len is not None:
+                video_path = os.path.join(self.video_root, video_name+ '_part' + str(part_index+1) + '.mp4')
+            else:
+                video_path = os.path.join(self.video_root, video_name+'.mp4')
+            return video_path
+
         else:
             raise ValueError(f'Unknown dataset prefix {dataset_name}')
 
@@ -640,41 +652,79 @@ class EpisodicDatasetCore(object):
         images : (L, H, W, 3)  uint8   – raw RGB frames
         mask   : (L,) bool                True where real frame, False where pad
         """
-        dataset_name = episode_id.split('_')[0]
-        # video_path   = self._resolve_video_path(dataset_name, epi['video_name'])
-        decode_table = epi['video_decode_frame']                      # (T,)
-        T            = len(decode_table)
-        frame_in_video = epi['video_decode_frame'][frame_id]
+        
+        if epi['video_decode_frame'] is None:
 
-        # ---------- build padded window indices ---------------------------
-        # Not support multiple images now
-        idx_win, oob = self._window_indices(frame_id, past, future, 0, T-1)     # (W,)
+            T = epi["smplx_params"]["root_pose"].shape[0] # T
+            frame_in_video = frame_id # scalar
 
-        if self.clip_len is not None:
-            part_idx = frame_in_video // self.clip_len # clip_len = 2000
-            frame_in_part = frame_in_video % self.clip_len
-            video_path = self._resolve_video_path(dataset_name, epi['video_name'], part_idx)
-            decode_ids = [frame_in_part]
+            # ---------- build padded window indices ---------------------------
+            # Not support multiple images now
+            idx_win, oob = self._window_indices(frame_id, past, future, 0, T-1)     # (W,)
+            
+            if self.clip_len is not None:
+                print(f"Function not implemented?")
+                sys.exit()
+            else:
+                video_path = self._resolve_video_path(epi['dataset_name'], epi['video_name'])
+                decode_ids = idx_win # 
+
+            # ---------- read images --------------------
+            # Retry mechanism: try up to 3 times to load video frames
+            for attempt in range(3):
+                try:
+                    imgs, _ = load_video_decord(video_path, frame_index=decode_ids, rotation=False)
+                    break  # Success, exit the retry loop
+                except Exception as e:
+                    # if attempt == 2:
+                    #     raise  # Raise the exception after 3 failed attempts
+                    print(f"Warning: failed to load video frames from {video_path} (attempt {attempt+1}/3): {e}")
+                    time.sleep(0.1)
+
+            images = np.stack(imgs, axis=0)           # (L,H,W,3) uint8
+            mask   = ~oob                             # (L,) bool
+
+            return images, mask
+
+        # original datasets
         else:
-            video_path = self._resolve_video_path(dataset_name, epi['video_name'])
-            decode_ids = decode_table[idx_win]
 
-        # ---------- read images --------------------
-        # Retry mechanism: try up to 3 times to load video frames
-        for attempt in range(3):
-            try:
-                imgs, _ = load_video_decord(video_path, frame_index=decode_ids, rotation=False)
-                break  # Success, exit the retry loop
-            except Exception as e:
-                # if attempt == 2:
-                #     raise  # Raise the exception after 3 failed attempts
-                print(f"Warning: failed to load video frames from {video_path} (attempt {attempt+1}/3): {e}")
-                time.sleep(0.1)
+            # somethingsomethingv2_84911_ep_000000 -> somethingsomethingv2
+            dataset_name = episode_id.split('_')[0]
+            # video_path   = self._resolve_video_path(dataset_name, epi['video_name'])
+            decode_table = epi['video_decode_frame']                    # (T,)
+            T            = len(decode_table)                            # T
+            frame_in_video = epi['video_decode_frame'][frame_id]        # frame_id=1, frame_in_video=10  
 
-        images = np.stack(imgs, axis=0)           # (L,H,W,3) uint8
-        mask   = ~oob                             # (L,) bool
+            # ---------- build padded window indices ---------------------------
+            # Not support multiple images now
+            idx_win, oob = self._window_indices(frame_id, past, future, 0, T-1)     # (W=1,) False
 
-        return images, mask
+            if self.clip_len is not None:
+                part_idx = frame_in_video // self.clip_len # clip_len = 2000
+                frame_in_part = frame_in_video % self.clip_len
+                video_path = self._resolve_video_path(dataset_name, epi['video_name'], part_idx)
+                decode_ids = [frame_in_part]
+            else:
+                video_path = self._resolve_video_path(dataset_name, epi['video_name'])
+                decode_ids = decode_table[idx_win]  # [10]
+
+            # ---------- read images --------------------
+            # Retry mechanism: try up to 3 times to load video frames
+            for attempt in range(3):
+                try:
+                    imgs, _ = load_video_decord(video_path, frame_index=decode_ids, rotation=False)
+                    break  # Success, exit the retry loop
+                except Exception as e:
+                    # if attempt == 2:
+                    #     raise  # Raise the exception after 3 failed attempts
+                    print(f"Warning: failed to load video frames from {video_path} (attempt {attempt+1}/3): {e}")
+                    time.sleep(0.1)
+
+            images = np.stack(imgs, axis=0)           # (1, 240, 360, 3) (L,H,W,3) uint8
+            mask   = ~oob                             # (L,) bool
+
+            return images, mask
 
     def _find_matching_texts(self, text_list, frame_id):
         """Find text annotations that overlap with the given frame.
@@ -866,8 +916,7 @@ class EpisodicDatasetCore(object):
 
             main_type   = None
             sub_type    = None
-
-            instruction = None
+            instruction = epi["text"]["body"][frame_id]
 
             # only the body to consider so we can reuse
             idx_body    = idx_win
@@ -875,28 +924,355 @@ class EpisodicDatasetCore(object):
             start_body  = 0
             end_body    = T - 1
 
+            """
+            # ============================================================
+            # 3. PREPARE SMPLX BODY POSE TEMPORAL WINDOW
+            # ============================================================
+            # Transforms SMPLX body pose parameters across a temporal window from world space
+            # to camera space and creates paired current/next-frame representations for training.
+            #
+            # SMPLX is a parametric body model (extension of SMPL) that represents full body pose
+            # using 21 body joints (63 parameters: 21 joints × 3 Euler angles in xyz format).
+            # Unlike MANO which models hands in detail, SMPLX captures the full body skeleton.
+            #
+            # INPUTS:
+            # -------
+            # - epi['smplx_params']: Dictionary containing SMPLX body reconstruction data
+            #       * 'body_pose': (T, 63) - Full body joint angles in Euler format (21 joints × 3)
+            #       * Additional SMPLX parameters (shape betas, root orientation, etc.)
+            #   where T = total frames in the episode
+            #
+            # - R_w2c: (T, 3, 3) - World-to-camera rotation matrices for each frame
+            #   Transforms from world coordinate system to camera view at each timestep
+            #
+            # - t_w2c: (T, 3) - World-to-camera translation vectors
+            #   Camera position in world coordinates at each timestep
+            #
+            # - idx_body: (W,) - Frame indices for the temporal window (typically W=16)
+            #   Specifies which frames from the episode to include in this window
+            #   Example: [5, 6, 7, ..., 20] for a 16-frame window starting at frame 5
+            #
+            # - frame_id: Scalar - The anchor frame index (current observation timestep)
+            #   All poses will be transformed relative to this frame's camera view
+            #
+            # - oob_body: (W,) bool - Out-of-bounds mask marking invalid frames
+            #   True where frame indices fall outside the valid episode range or 
+            #   annotated text segment. Invalid frames will be reset to identity pose.
+            #
+            # - start_body/end_body: Valid frame range boundaries for the body data
+            #   Typically (0, T-1) when processing full episode without text constraints
+            #
+            # - upsample_factor: Temporal upsampling ratio (≥1.0)
+            #   If >1, interpolates between frames using PCHIP for smoother trajectories
+            #
+            # PROCESSING STEPS:
+            # ----------------
+            # 1. Extends window by +1 frame: W → W+1 to enable (current, next) pairing
+            #    Example: [f₀, f₁, ..., f₁₅] → [f₀, f₁, ..., f₁₅, f₁₆]
+            #
+            # 2. Extracts SMPLX body_pose (63-dim Euler angles) for W+1 frames
+            #
+            # 3. Handles out-of-bounds frames: Sets invalid poses to identity (rest pose)
+            #    to prevent corrupted data from extrapolation beyond episode boundaries
+            #
+            # 4. Converts Euler angles → Rotation matrices for geometric transformations
+            #    (63,) → (21, 3, 3) per frame for 21 body joints
+            #
+            # 5. Transforms from world space → camera space using anchor frame's extrinsics
+            #    This makes all body poses relative to the current camera viewpoint,
+            #    which is critical for egocentric action prediction
+            #
+            # 6. Optional temporal upsampling via PCHIP interpolation if upsample_factor > 1
+            #    Creates smoother motion trajectories for better action prediction
+            #
+            # 7. Splits W+1 frames into paired (current, next) sequences of length W:
+            #    - Current: [f₀, f₁, ..., f₁₅] (frames at time t)
+            #    - Next:    [f₁, f₂, ..., f₁₆] (frames at time t+1)
+            #    Enables supervised learning of Δpose₍ₜ→ₜ₊₁₎
+            #
+            # OUTPUT DICTIONARY (win_body):
+            # ----------------------------
+            # All arrays have shape (W, ...) after current/next splitting:
+            #
+            # Current frame representations:
+            # - 'R_cam': (W, 3, 3) - Camera-space body root orientations
+            # - 't_cam': (W, 3) - Camera-space body root translations  
+            # - 'smplx_euler': (W, 63) - Body joint angles in Euler format (21 joints × 3)
+            # - 'smplx_P': (W, 21, 3, 3) - Body joint rotation matrices
+            # - 'kept': (W,) bool - Validity mask for current frames
+            #
+            # Next frame representations (for learning temporal dynamics):
+            # - 'R_cam_next': (W, 3, 3) - Body root orientation at t+1
+            # - 't_cam_next': (W, 3) - Body root translation at t+1
+            # - 'smplx_euler_next': (W, 63) - Body joint angles at t+1
+            # - 'smplx_P_next': (W, 21, 3, 3) - Body joint rotations at t+1
+            # - 'kept_next': (W,) bool - Validity mask for next frames
+            #
+            # USAGE EXAMPLE:
+            # -------------
+            # Given frame_id=10, action_past_window_size=0, action_future_window_size=15:
+            #   idx_body = [10, 11, 12, ..., 25] (W=16 frames)
+            #   
+            # win_body contains:
+            #   - smplx_euler[0] = body pose at frame 10 (current state)
+            #   - smplx_euler_next[0] = body pose at frame 11 (target for prediction)
+            #   - ...
+            #   - smplx_euler[15] = body pose at frame 25
+            #   - smplx_euler_next[15] = body pose at frame 26
+            #
+            # This paired structure allows the model to learn:
+            #   action₍ₜ₎ = f(state₍ₜ₎, state₍ₜ₊₁₎)
+            # ============================================================
+            """
             win_body  = self._prepare_smplx_window(
                 epi['smplx_params'],  R_w2c, t_w2c, idx_body, frame_id, anchor_frame=True, 
                 oob=oob_body, start=start_body, end=end_body, upsample_factor=self.upsample_factor
             )
             idx_center = action_past_window_size          # local index of t0 in window
 
+            """
+            # ============================================================
+            # 4. COMPUTE ABSOLUTE & RELATIVE BODY POSE ACTIONS
+            # ============================================================
+            # Converts paired (current, next) SMPLX body pose representations into
+            # action sequences for supervised learning. Computes both absolute and
+            # relative pose deltas across the temporal window.
+            #
+            # PURPOSE:
+            # --------
+            # Transforms the raw SMPLX body pose window into trainable action representations
+            # that the model will learn to predict. Actions encode the change in body pose
+            # from one timestep to the next, enabling the model to learn motion dynamics.
+            #
+            # INPUTS:
+            # -------
+            # - win_body: Dictionary from _prepare_smplx_window containing:
+            #     * R_cam, t_cam: (W, 3, 3) and (W, 3) - Current frame body root poses
+            #     * R_cam_next, t_cam_next: (W, 3, 3) and (W, 3) - Next frame body root poses
+            #     * smplx_euler: (W, 63) - Current frame body joint angles (21 joints × 3)
+            #     * smplx_euler_next: (W, 63) - Next frame body joint angles
+            #     * smplx_P: (W, 21, 3, 3) - Current frame joint rotation matrices
+            #     * smplx_P_next: (W, 21, 3, 3) - Next frame joint rotation matrices
+            #     * kept, kept_next: (W,) bool - Validity masks for current/next frames
+            #   where W = temporal window length (typically 16)
+            #
+            # - anchor_idx: Scalar index of the anchor frame within the window
+            #   Typically = action_past_window_size (e.g., 0 if no past context)
+            #   This is the "current observation" frame t₀
+            #
+            # - rel_mode: String specifying the reference frame for relative actions
+            #   * "step": Compute frame-to-frame deltas Δ(tᵢ → tᵢ₊₁)
+            #     Encodes how pose changes from each frame to its immediate successor
+            #     Example: If at frame 10, compute change from frame 10→11
+            #   
+            #   * "anchor": Compute deltas relative to anchor frame Δ(t₀ → tᵢ₊₁)
+            #     All poses are expressed relative to the current observation
+            #     Example: If anchor is frame 10, compute 10→11, 10→12, ..., 10→25
+            #
+            # - action_type: String specifying pose representation format
+            #   * "angle": Use Euler angles (xyz convention) for body joints
+            #     Output: 63 dimensions (21 joints × 3 Euler angles)
+            #   
+            #   * "keypoints": Use 3D joint positions in MANO canonical space
+            #     Output: 63 dimensions (21 joints × 3 coordinates)
+            #     (Note: For SMPLX, keypoints are not extracted in current implementation)
+            #
+            # PROCESSING PIPELINE:
+            # -------------------
+            # 1. Extract current and next-frame body pose components:
+            #    - Root translation: t_cur, t_nxt (camera space)
+            #    - Root rotation: R_cur, R_nxt (3×3 matrices)
+            #    - Joint rotations: P_cur, P_nxt (21×3×3 matrices)
+            #    - Joint angles: smplx_euler_next (63-dim Euler)
+            #    - Validity: kept, kept_next (boolean masks)
+            #
+            # 2. Compute ABSOLUTE actions (target poses at t+1):
+            #    action_abs = [t_next, euler(R_next), body_pose_next]
+            #    Shape: (W, 69) = (W, 3 + 3 + 63)
+            #    - Translation at t+1: (3,) in camera space
+            #    - Root rotation at t+1: (3,) Euler angles
+            #    - Body joint angles at t+1: (63,) Euler angles or keypoints
+            #
+            # 3. Compute RELATIVE actions (pose deltas):
+            #    
+            #    If rel_mode == "step" (frame-to-frame):
+            #      Δt = t_next - t_cur                    # Translation delta
+            #      ΔR = R_next @ R_cur^T                  # Rotation delta (composition)
+            #      ΔP = P_next @ P_cur^T                  # Joint rotation deltas (21 joints)
+            #      valid = kept & kept_next               # Both frames must be valid
+            #    
+            #    If rel_mode == "anchor" (anchor-relative):
+            #      Δt = t_next - t_anchor                 # Delta from anchor to next
+            #      ΔR = R_next @ R_anchor^T               # Rotation from anchor to next
+            #      ΔP = P_next @ P_anchor^T               # Joint deltas from anchor
+            #      valid = kept_next & kept[anchor_idx]   # Anchor and next must be valid
+            #    
+            #    Convert rotation deltas to Euler angles:
+            #      ΔP_euler = euler(ΔP)                   # (W, 63) Euler angle deltas
+            #    
+            #    Combine into action vector:
+            #      action_rel = [Δt, euler(ΔR), ΔP_euler]
+            #      Shape: (W, 69) = (W, 3 + 3 + 63)
+            #
+            # 4. Apply validity masking:
+            #    - Set action_abs[~valid] = 0.0  (zero out invalid absolute actions)
+            #    - Set action_rel[~valid] = 0.0  (zero out invalid relative actions)
+            #    This prevents the model from learning from corrupted/extrapolated data
+            #
+            # OUTPUT TENSORS:
+            # --------------
+            # abs_body: (W, 69) float32 - Absolute body pose actions
+            #   Format: [t_next(3), euler(R_next)(3), body_joints_next(63)]
+            #   Represents the target body pose at each timestep t+1
+            #   Used when training with absolute pose prediction
+            #
+            # rel_body: (W, 69) float32 - Relative body pose actions  
+            #   Format: [Δt(3), Δeuler(R)(3), Δbody_joints(63)]
+            #   Represents the change in body pose from reference to t+1
+            #   Used when training with relative pose delta prediction (default)
+            #
+            # msk_body: (W,) bool - Action validity mask
+            #   True where both current and next frames have valid SMPLX reconstruction
+            #   False for frames outside episode boundaries or failed reconstructions
+            #   Used to mask loss computation during training
+            #
+            # COORDINATE FRAME:
+            # ----------------
+            # All actions are in CAMERA SPACE (not world space):
+            # - Translations are in meters relative to camera origin
+            # - Rotations are relative to camera coordinate frame
+            # This camera-centric representation is critical for egocentric action
+            # prediction, as it makes poses invariant to global camera motion.
+            #
+            # USAGE EXAMPLE:
+            # -------------
+            # Given:
+            #   - frame_id = 10, action_past_window_size = 0, action_future_window_size = 15
+            #   - idx_body = [10, 11, 12, ..., 25] (W=16)
+            #   - idx_center = 0 (anchor is first frame in window)
+            #   - rel_mode = "step"
+            #
+            # Processing:
+            #   win_body contains paired poses:
+            #     smplx_euler[0] = pose at frame 10, smplx_euler_next[0] = pose at frame 11
+            #     smplx_euler[1] = pose at frame 11, smplx_euler_next[1] = pose at frame 12
+            #     ...
+            #     smplx_euler[15] = pose at frame 25, smplx_euler_next[15] = pose at frame 26
+            #
+            # Output:
+            #   abs_body[0] = absolute pose at frame 11
+            #   rel_body[0] = pose delta from frame 10→11
+            #   abs_body[1] = absolute pose at frame 12
+            #   rel_body[1] = pose delta from frame 11→12
+            #   ...
+            #   abs_body[15] = absolute pose at frame 26
+            #   rel_body[15] = pose delta from frame 25→26
+            #
+            # The model learns to predict:
+            #   Given: Current observation at frame t
+            #   Predict: rel_body[i] = Δpose to reach frame t+i+1
+            # ============================================================
+            """
             abs_body, rel_body, msk_body = self._make_action_window_vec(
                 win_body,  anchor_idx=idx_center, rel_mode=rel_mode, action_type=self.action_type
             ) # [16, 69] [16, 69] [16,]
 
-            action_abs  = abs_body #np.concatenate([abs_L, abs_R], axis=1)  # (W,action_dim)
-            action_rel  = rel_body #np.concatenate([rel_L, rel_R], axis=1)  # (W,102)
-            action_mask = msk_body #np.stack([msk_L, msk_R], axis=1)        # (W,2)
+            action_abs  = abs_body                                          # (W, 69) single body
+            action_rel  = rel_body                                          # (W, 69) single body
+            # CRITICAL: Reshape mask to (W, 1) for compatibility with pad_action function
+            # pad_action expects shape (W, num_entities) where num_entities=2 for dual-hand, 1 for single-body
+            action_mask = msk_body[:, np.newaxis]                           # (W, 1) single body mask
 
+            """
+            # ============================================================
+            # 5. CONSTRUCT CURRENT STATE (SMPLX SINGLE-BODY)
+            # ============================================================
+            # Builds the current observation state at anchor frame (frame_id).
+            # This represents "what the robot/model sees NOW" before predicting future actions.
+            #
+            # CRITICAL DISTINCTION: STATE vs ACTION (SMPLX)
+            # =============================================
+            #
+            # **current_state**:
+            #   - TEMPORAL: Single timestep (snapshot at time t₀)
+            #   - CONTENT: Only pose parameters (NO betas for SMPLX in this implementation)
+            #   - FORMAT: Always ABSOLUTE pose in camera space
+            #   - PURPOSE: Current observation input to the model
+            #   - SHAPE: (69,) = t_cam(3) + euler(R_cam)(3) + body_pose(63)
+            #     * t_cam: (3,) body root translation in camera space
+            #     * euler(R_cam): (3,) body root rotation as Euler angles
+            #     * body_pose: (63,) 21 body joints × 3 Euler angles
+            #
+            # **action_list**:
+            #   - TEMPORAL: Sequence of W timesteps (future trajectory from t₁ to t_W)
+            #   - CONTENT: Only pose parameters (matching state for SMPLX)
+            #   - FORMAT: Can be RELATIVE (deltas, default) or ABSOLUTE (target poses)
+            #   - PURPOSE: Target predictions for the model to learn
+            #   - SHAPE: (W, 69) = W timesteps × 69 dims per timestep
+            #     * Per timestep: t_cam(3) + euler(R_cam)(3) + body_pose(63) = 69
+            #
+            # KEY DIFFERENCES FROM MANO:
+            # --------------------------
+            # 1. **No shape parameters (betas)**:
+            #    - MANO state includes 10 betas per hand (hand size/shape)
+            #    - SMPLX omits betas in this implementation (could be added if needed)
+            #    - Result: SMPLX state and action have SAME dimensionality (69)
+            #
+            # 2. **Single entity vs dual entities**:
+            #    - SMPLX: 1 body → state (69,), action (W, 69), mask (1,) and (W, 1)
+            #    - MANO: 2 hands → state (122,), action (W, 102), mask (2,) and (W, 2)
+            #
+            # 3. **Temporal dimension still differs**:
+            #    - STATE is 1D: (69,) - Single snapshot "I see THIS body pose now"
+            #    - ACTIONS are 2D: (W, 69) - Trajectory "Move body like THIS over next W frames"
+            #
+            # 4. **Absolute vs Relative still applies**:
+            #    - STATE is always ABSOLUTE: "Body is at position [x,y,z] with joints at [θ₁, θ₂, ...]"
+            #    - ACTIONS can be RELATIVE: "Move body by Δx, Δy, Δz with joint deltas [Δθ₁, Δθ₂, ...]"
+            #
+            # CONCRETE EXAMPLE:
+            # ----------------
+            # frame_id = 50, action_future_window_size = 15 (W=16)
+            #
+            # current_state (69 dims):
+            #   [0.0, 0.5, 1.2, 0.0, 0.0, 0.0, <63 body joint angles>]
+            #   → Represents: "At frame 50, body root is at (0.0, 0.5, 1.2) with upright orientation"
+            #
+            # action_list (16, 69) - if use_rel=True:
+            #   Row 0:  [Δpose from frame 50→51] = [0.01, 0.02, 0.0, 0.0, 0.0, 0.01, ...]
+            #   Row 1:  [Δpose from frame 51→52] = [0.01, 0.02, 0.0, 0.0, 0.0, 0.01, ...]
+            #   ...
+            #   Row 15: [Δpose from frame 65→66] = [0.01, 0.01, -0.01, 0.0, 0.0, 0.0, ...]
+            #   → Represents: "To reach frame 51, move body by [+0.01, +0.02, 0.0] with joint deltas [...]"
+            #
+            # MODEL TRAINING:
+            # --------------
+            # Input:  current_state (69,) + image_list + instruction
+            # Output: Predict action_list (W, 69)
+            # Loss:   Compare predicted actions vs ground truth actions
+            # 
+            # At inference:
+            #   1. Observe current body state at frame t
+            #   2. Model predicts future body motions (actions)
+            #   3. Execute actions to control robot body
+            #   4. Update state based on executed actions
+            #   5. Repeat for next timestep
+            # ============================================================
+            """
             cur = self._pack_state(win_body['R_cam'],
                         win_body['t_cam'],
                         win_body['smplx_euler'] if self.action_type=='angle' else win_body['smplx_curr'].reshape(W, -1),
-                        idx_center) # [69]
+                        idx_center) # [3 + 3 + 63] = 69 dims
 
-            betas = []
-            current_state = np.concatenate([cur, betas])                    # [69]
-            current_state_mask  = np.array([win_body['kept'][idx_center]])  # [1]
+            betas = epi["smplx_params"]["shape"][frame_id]
+            current_state = np.concatenate([cur, betas])                    # (69,) single body state
+            current_state_mask  = np.array([win_body['kept'][idx_center]])  # (1,) single body mask
+            
+            # NOTE: The padding functions (pad_state_human, pad_action) now handle both
+            # dual-hand MANO (num_entities=2) and single-body SMPLX (num_entities=1) cases.
+            #   - For SMPLX: state_mask is (1,), action_mask is (W, 1)
+            #   - For MANO: state_mask is (2,), action_mask is (W, 2)
+            # The functions automatically detect num_entities and apply appropriate logic.
 
             # ------------------------------------------------------------------
             # 5. RGB window
@@ -919,33 +1295,181 @@ class EpisodicDatasetCore(object):
             # 6. Calculate New_intrinsics
             # ------------------------------------------------------------------
 
-            dataset_name = episode_id.split('_')[0]
+            #dataset_name = episode_id.split('_')[0]
             intrinsics = epi['intrinsics']
             new_intrinsics = compute_new_intrinsics_resize(intrinsics, (H, W))
 
             fov = calculate_fov( 2 * new_intrinsics[1][2], 2 * new_intrinsics[0][2], new_intrinsics)
 
+            """
+            # ============================================================
+            # 7. SELECT ACTION REPRESENTATION MODE
+            # ============================================================
+            # Determines whether to use fully relative or hybrid action representation.
+            # This is controlled by the `use_rel` flag from the config file.
+            #
+            # CONTEXT:
+            # --------
+            # At this point, we have two action representations computed:
+            #   - action_rel: (W, 69) - Fully relative actions [Δt, Δeuler(R), Δbody_joints]
+            #   - action_abs: (W, 69) - Fully absolute actions [t_next, euler(R_next), body_joints_next]
+            #
+            # Action dimensions (69 total for SMPLX body):
+            #   [0:3]   - Translation (t) in camera space
+            #   [3:6]   - Root rotation as Euler angles (R)
+            #   [6:69]  - Body joint angles (63 dims = 21 joints × 3 Euler angles)
+            #
+            # TWO MODES:
+            # ----------
+            # Mode 1: use_rel=True (FULLY RELATIVE)
+            #   Use pure relative actions throughout
+            #   action_list = action_rel = [Δt, Δeuler(R), Δbody_joints]
+            #   
+            #   Advantages:
+            #     - Easier for model to learn small deltas
+            #     - More stable training gradients
+            #     - Better handles long-horizon predictions
+            #
+            # Mode 2: use_rel=False (HYBRID: Relative root + Absolute joints)
+            #   Use relative for root pose, absolute for joint angles
+            #   action_list = [Δt, Δeuler(R), body_joints_abs]
+            #   
+            #   Reasoning:
+            #     - Root translation/rotation benefit from relative deltas (small changes)
+            #     - Joint angles may be easier to predict in absolute form (target pose)
+            #     - Hybrid approach can improve prediction accuracy for articulated poses
+            #
+            # WHY THE `//2` OPERATION?
+            # ------------------------
+            # The code `rel = action_rel[:, :action_rel.shape[1]//2]` appears here but
+            # is somewhat misleading for single-body SMPLX:
+            #
+            # 1. For SMPLX (single body): shape[1] = 69, so //2 = 34
+            #    - Takes first 34 dims: [t(3), euler(R)(3), partial_body_joints(28)]
+            #    - This splitting doesn't align with semantic boundaries
+            #    - The //2 is essentially UNUSED in the final concatenation
+            #
+            # 2. The ACTUAL logic being applied (look at the concatenation):
+            #    action_list = np.concatenate([rel[:, :6], abs[:, 6:]], axis=1)
+            #    
+            #    Breaking this down:
+            #    - rel[:, :6]:  First 6 dims from relative = [Δt(3), Δeuler(R)(3)]
+            #    - abs[:, 6:]:  Dims 6+ from absolute = [body_joints_abs(63)]
+            #    
+            #    Result: [Δt(3), Δeuler(R)(3), body_joints_abs(63)] = 69 dims
+            #    (Relative root pose + Absolute joint angles)
+            #
+            # 3. WHY is `//2` there then? (ANSWER: Copy-pasted from MANO code)
+            #    This code mirrors the dual-hand (MANO) case where `//2` is ESSENTIAL:
+            #    - action_rel/abs have shape (W, 102) = left_hand(51) + right_hand(51)
+            #    - The //2 FIRST splits into left vs right: [:, :51] and [:, 51:]
+            #    - THEN each hand independently gets hybrid treatment: rel[:6] + abs[6:]
+            #    - See the MANO code path (else block) for the correct usage
+            #    
+            #    For SMPLX single-body, the //2 is semantically unnecessary and
+            #    could be removed (just use `action_rel` and `action_abs` directly).
+            #    However, it's kept for code consistency with MANO and doesn't affect
+            #    the output since [:, :6] and [:, 6:] operate on the correct ranges.
+            #
+            # TODO: Consider simplifying to:
+            #       action_list = np.concatenate([action_rel[:, :6], action_abs[:, 6:]], axis=1)
+            #
+            # FINAL OUTPUT:
+            # ------------
+            # action_list: (W, 69) float32
+            #   When use_rel=True:  [Δt, Δeuler(R), Δbody_joints] (fully relative)
+            #   When use_rel=False: [Δt, Δeuler(R), body_joints_abs] (hybrid)
+            #
+            # This action_list will be normalized and padded later before 
+            # being fed to the model for training.
+            # ============================================================
+            """
             if self.use_rel:
                 action_list = action_rel
-            else:
-                # use abs action for hand pose only
-                rel = action_rel[:, :action_rel.shape[1]//2]
-                abs = action_abs[:, :action_abs.shape[1]//2]
-                
-                action_list = np.concatenate([rel[:, :6], abs[:, 6:]], axis=1)
 
-            # ------------------------------------------------------------------
-            # 8. Return to caller
-            # ------------------------------------------------------------------
+            # goes in
+            else:
+                # use abs action for body joint angles only (keep root relative)
+                rel = action_rel 
+                abs = action_abs
+
+                # Hybrid: Relative root (translation+rotation) + Absolute body joints
+                action_list = np.concatenate([rel[:, :6], abs[:, 6:]], axis=1)  # (W, 69) = 6 + 63
+
+            """
+            # ============================================================
+            # 8. PACKAGE RETURN DICTIONARY (SMPLX SINGLE-BODY)
+            # ============================================================
+            # Returns a complete training sample containing:
+            #   - Current observation (state + images)
+            #   - Future trajectory to predict (actions)
+            #   - Task description (instruction)
+            #   - Camera parameters (intrinsics, fov)
+            #
+            # SUMMARY: STATE vs ACTION DIMENSIONS (SMPLX)
+            # ===========================================
+            #
+            # **current_state**: (69,) float32 - SINGLE TIMESTEP
+            #   Format: [body_root_translation(3), body_root_rotation(3), body_joints(63)]
+            #   Component breakdown:
+            #     - t_cam: (3,) body root translation in camera space
+            #     - euler(R_cam): (3,) body root rotation as Euler angles
+            #     - body_pose: (63,) body joint angles (21 joints × 3 Euler angles)
+            #   Total: 3 + 3 + 63 = 69 dims
+            #   Note: No betas (shape parameters) included in this SMPLX implementation
+            #
+            # **action_list**: (W, 69) float32 - W TIMESTEPS
+            #   Format: Same 69-dim structure as state, repeated for W timesteps
+            #   Component breakdown per timestep:
+            #     - t_cam: (3,) body translation (or Δt if relative)
+            #     - euler(R_cam): (3,) body rotation (or Δeuler if relative)
+            #     - body_pose: (63,) body joint angles (or Δpose if relative)
+            #   Total: 3 + 3 + 63 = 69 dims per timestep
+            #   Across W timesteps: (W, 69)
+            #
+            # **current_state_mask**: (1,) bool - Body validity at anchor frame
+            #   [body_valid]
+            #   True if body has valid SMPLX reconstruction at frame_id
+            #
+            # **action_mask**: (W, 1) bool - Body validity across trajectory
+            #   [:, 0] = body validity for each of W timesteps
+            #   True if both current AND next frame have valid body data
+            #
+            # **instruction**: str - Natural language task description
+            #   Example: "Person is walking forward while waving."
+            #   Describes the full-body motion being performed
+            #
+            # **fov**: (2,) float32 - Field of view [fov_x, fov_y] in radians
+            #   Derived from camera intrinsics, used for perspective-aware prediction
+            #
+            # **intrinsics**: (3, 3) float32 - Camera intrinsic matrix K
+            #   [[fx,  0, cx],
+            #    [ 0, fy, cy],
+            #    [ 0,  0,  1]]
+            #   After augmentation/resizing, used for 3D-2D projection
+            #
+            # COMPARISON WITH MANO:
+            # --------------------
+            # SMPLX: state(69,)  action(W,69)  - Same dims, single body
+            # MANO:  state(122,) action(W,102) - Different dims (betas included), dual hands
+            #
+            # DOWNSTREAM PROCESSING:
+            # ---------------------
+            # This dict is passed to transform_trajectory() which:
+            #   1. Normalizes actions and states using dataset statistics
+            #   2. Pads to unified dimensions (action: 192, state: 212)
+            #   3. Converts to PyTorch tensors for model training
+            # ============================================================
+            """
 
             result_dict = dict(
-                instruction             = instruction,
-                action_list             = action_list,          # (W,2*51) float32
-                action_mask             = action_mask,          # (W,2)   bool
-                current_state           = current_state,        # (2*61,)  float32
-                current_state_mask      = current_state_mask,   # (2,) bool
-                fov                     = fov,                  # (2,) float32
-                intrinsics              = new_intrinsics,       # (3,3) float32
+                instruction             = instruction,           # str - task description (e.g., from video captions)
+                action_list             = action_list,           # (W, 69) float32 - future body trajectory
+                action_mask             = action_mask,           # (W, 1) bool - body validity per timestep
+                current_state           = current_state,         # (69,) float32 - current observation
+                current_state_mask      = current_state_mask,    # (1,) bool - body validity at anchor
+                fov                     = fov,                   # (2,) float32 - [fov_x, fov_y]
+                intrinsics              = new_intrinsics,        # (3, 3) float32 - camera intrinsics K
             )
             
             if image_list is not None:
@@ -974,9 +1498,155 @@ class EpisodicDatasetCore(object):
                 action_future_window_size = action_future_window_size,
             )
             
-            # ------------------------------------------------------------------
-            # 4. Vectorised actions  (left + right)
-            # ------------------------------------------------------------------
+            """
+            # ============================================================
+            # 4. PREPARE MANO HAND POSE TEMPORAL WINDOWS (DUAL-HAND)
+            # ============================================================
+            # Transforms MANO hand parameters for BOTH hands across temporal windows from world space
+            # to camera space and creates paired current/next-frame representations for training.
+            #
+            # MANO is a parametric hand model that represents hand pose using:
+            # - Wrist pose: 3D translation + 3×3 rotation matrix (6 DOF)
+            # - Finger pose: 15 finger joints × 3×3 rotation matrices (45 DOF)
+            # - Hand shape: 10 PCA coefficients (beta parameters)
+            # Total: 61 parameters per hand (excluding shape which is per-episode constant)
+            #
+            # Unlike SMPLX which models the full body, MANO provides detailed articulated models
+            # for each hand separately, enabling fine-grained manipulation prediction.
+            #
+            # KEY DIFFERENCE FROM SMPLX:
+            # -------------------------
+            # - SMPLX: Single body model with text-independent temporal window
+            #   * idx_body is derived directly from frame_id
+            #   * start_body, end_body span the full episode [0, T-1]
+            #   * No hand-specific text annotations to consider
+            #
+            # - MANO: Dual hands with text-DEPENDENT temporal windows
+            #   * idx_win_left and idx_win_right can DIFFER between hands
+            #   * Each hand has its own text annotation with time boundaries
+            #   * start_left, end_left constrain left hand's valid range
+            #   * start_right, end_right constrain right hand's valid range
+            #   * Example: "Left hand: Pick up cup [frames 5-30]. Right hand: Hold plate [frames 15-40]."
+            #     → Left window might be [5,6,...,20], Right window [15,16,...,30]
+            #
+            # INPUTS (PER HAND):
+            # ------------------
+            # - epi['left'] / epi['right']: Dictionary containing MANO hand reconstruction data
+            #     * 'global_orient_worldspace': (T, 3, 3) - Wrist rotation matrices in world coords
+            #     * 'transl_worldspace': (T, 3) - Wrist translations in world coords
+            #     * 'hand_pose': (T, 15, 3, 3) - Finger joint rotations (15 joints × 3×3 rotation)
+            #     * 'joints_worldspace': (T, 21, 3) - Hand keypoint positions in world coords
+            #     * 'kept_frames': (T,) - Binary mask for valid hand reconstructions
+            #     * 'beta': (10,) - MANO shape parameters (PCA coefficients)
+            #   where T = total frames in the episode
+            #
+            # - R_w2c: (T, 3, 3) - World-to-camera rotation matrices for each frame
+            #   Transforms from world coordinate system to camera view at each timestep
+            #
+            # - t_w2c: (T, 3) - World-to-camera translation vectors
+            #   Camera position in world coordinates at each timestep
+            #
+            # - idx_win_left / idx_win_right: (W_L,) and (W_R,) - Frame indices for each hand's window
+            #   Specifies which frames to include. These can have DIFFERENT lengths and ranges:
+            #   * W_L (left window length) may differ from W_R (right window length)
+            #   * idx_win_left might be [5,6,...,20] while idx_win_right is [15,16,...,30]
+            #   This asymmetry arises when hands have non-overlapping text annotations
+            #
+            # - frame_id: Scalar - The anchor frame index (current observation timestep)
+            #   All poses will be transformed relative to this frame's camera view
+            #   Note: frame_id is typically within BOTH left and right windows, but edge cases exist
+            #
+            # - oob_left / oob_right: (W_L,) and (W_R,) bool - Out-of-bounds masks per hand
+            #   True where frame indices fall outside the valid episode range OR outside
+            #   the hand's text-annotated segment. Invalid frames will be reset to identity pose.
+            #   Example: If left hand text covers frames [10-30] but window extends to [5-35],
+            #            then oob_left will be True for frames [5-9] and [31-35]
+            #
+            # - start_left, end_left / start_right, end_right: Valid frame range boundaries per hand
+            #   Derived from text annotations: frames where the hand is actively performing its task
+            #   Unlike SMPLX (always 0, T-1), these are TEXT-CONSTRAINED subsets of the episode
+            #
+            # - upsample_factor: Temporal upsampling ratio (≥1.0)
+            #   If >1, interpolates between frames using PCHIP for smoother trajectories
+            #
+            # PROCESSING STEPS (PER HAND):
+            # ---------------------------
+            # 1. Extends window by +1 frame: W → W+1 to enable (current, next) pairing
+            #    Example: [f₀, f₁, ..., f₁₅] → [f₀, f₁, ..., f₁₅, f₁₆]
+            #
+            # 2. Extracts MANO parameters for W+1 frames:
+            #    - Wrist pose: R_mano (3×3), t_mano (3,)
+            #    - Finger joints: hand_P (15×3×3)
+            #    - Keypoints: joints_worldspace (21×3)
+            #    - Validity: kept_frames (bool)
+            #
+            # 3. Handles out-of-bounds frames: Sets invalid poses to identity (rest pose)
+            #    This is CRITICAL for text-based datasets where windows can extend beyond
+            #    annotated segments. Prevents corrupted data from extrapolation.
+            #
+            # 4. Converts finger rotation matrices → Euler angles for neural network processing
+            #    (15×3×3) → (45,) per frame, using xyz Euler convention
+            #
+            # 5. Transforms keypoints from world space → MANO canonical space (root-relative)
+            #    Formula: joints_mano = R_mano^T @ (joints_world - t_mano)
+            #    This representation is invariant to global hand position/rotation
+            #
+            # 6. Transforms wrist pose from world space → camera space using anchor frame's extrinsics
+            #    - R_cam = R_world2cam @ R_mano_world
+            #    - t_cam = R_world2cam @ t_mano_world + t_world2cam
+            #    Makes hand poses egocentric (relative to current camera viewpoint)
+            #
+            # 7. Optional temporal upsampling via PCHIP interpolation if upsample_factor > 1
+            #    Creates smoother motion trajectories for better action prediction
+            #
+            # 8. Splits W+1 frames into paired (current, next) sequences of length W:
+            #    - Current: [f₀, f₁, ..., f_{W-1}] (frames at time t)
+            #    - Next:    [f₁, f₂, ..., f_W] (frames at time t+1)
+            #    Enables supervised learning of Δpose_{t→t+1}
+            #
+            # OUTPUT DICTIONARIES (PER HAND):
+            # -------------------------------
+            # win_left and win_right each contain arrays of shape (W, ...):
+            #
+            # Current frame representations:
+            # - 'R_cam': (W, 3, 3) - Camera-space wrist orientations
+            # - 't_cam': (W, 3) - Camera-space wrist translations
+            # - 'pose_euler': (W, 45) - Finger angles in Euler format (15 joints × 3)
+            # - 'hand_P': (W, 15, 3, 3) - Finger joint rotation matrices
+            # - 'joints_manospace': (W, 21, 3) - Hand keypoints in MANO canonical space
+            # - 'kept': (W,) bool - Validity mask for current frames
+            #
+            # Next frame representations (for learning temporal dynamics):
+            # - 'R_cam_next': (W, 3, 3) - Wrist orientation at t+1
+            # - 't_cam_next': (W, 3) - Wrist translation at t+1
+            # - 'pose_euler_next': (W, 45) - Finger angles at t+1
+            # - 'hand_P_next': (W, 15, 3, 3) - Finger rotations at t+1
+            # - 'joints_manospace_next': (W, 21, 3) - Keypoints at t+1
+            # - 'kept_next': (W,) bool - Validity mask for next frames
+            #
+            # USAGE EXAMPLE:
+            # -------------
+            # Given:
+            #   - frame_id = 10, action_past_window_size = 0, action_future_window_size = 15
+            #   - Left hand text: "Pick cup" [frames 5-25]
+            #   - Right hand text: "Hold plate" [frames 10-30]
+            #   
+            # After _build_instruction:
+            #   - idx_win_left = [10,11,...,25], start_left=5, end_left=25
+            #   - idx_win_right = [10,11,...,25], start_right=10, end_right=30
+            #   
+            # win_left and win_right each contain 16 frames:
+            #   - pose_euler[0] = left/right hand pose at frame 10 (current state)
+            #   - pose_euler_next[0] = left/right hand pose at frame 11 (target prediction)
+            #   - ...
+            #   - pose_euler[15] = pose at frame 25
+            #   - pose_euler_next[15] = pose at frame 26
+            #
+            # This paired structure allows the model to learn:
+            #   action_t = f(state_t, state_{t+1})
+            # for each hand independently, then combine them for dual-hand prediction.
+            # ============================================================
+            """
             win_left  = self._prepare_side_window(
                 epi['left'],  R_w2c, t_w2c, idx_win_left, frame_id, anchor_frame=True, 
                 oob=oob_left, start=start_left, end=end_left, upsample_factor=self.upsample_factor
@@ -987,8 +1657,198 @@ class EpisodicDatasetCore(object):
             )
             idx_center = action_past_window_size # 0, local index of t0 in window
             
-            # rel_mode: "step"  or  "anchor" / action_type: "angle" or "keypoints"
-            # step: relative to previous frame, anchor: relative to t0
+            """
+            # ============================================================
+            # 5. COMPUTE ABSOLUTE & RELATIVE HAND POSE ACTIONS (DUAL-HAND)
+            # ============================================================
+            # Converts paired (current, next) MANO hand pose representations into
+            # action sequences for supervised learning. Computes both absolute and
+            # relative pose deltas across the temporal window FOR EACH HAND.
+            #
+            # PURPOSE:
+            # --------
+            # Transforms the raw MANO hand pose windows into trainable action representations
+            # that the model will learn to predict. Actions encode the change in hand pose
+            # from one timestep to the next, enabling the model to learn bimanual manipulation
+            # dynamics and coordination between left and right hands.
+            #
+            # INPUTS (PER HAND):
+            # ------------------
+            # - win_left / win_right: Dictionaries from _prepare_side_window containing:
+            #     * R_cam, t_cam: (W, 3, 3) and (W, 3) - Current frame wrist poses
+            #     * R_cam_next, t_cam_next: (W, 3, 3) and (W, 3) - Next frame wrist poses
+            #     * pose_euler: (W, 45) - Current frame finger angles (15 joints × 3 Euler)
+            #     * pose_euler_next: (W, 45) - Next frame finger angles
+            #     * hand_P: (W, 15, 3, 3) - Current frame finger rotation matrices
+            #     * hand_P_next: (W, 15, 3, 3) - Next frame finger rotation matrices
+            #     * joints_manospace: (W, 21, 3) - Current frame keypoints in MANO space
+            #     * joints_manospace_next: (W, 21, 3) - Next frame keypoints
+            #     * kept, kept_next: (W,) bool - Validity masks for current/next frames
+            #   where W = temporal window length (typically 16)
+            #   Note: W can differ between left and right hands if text annotations differ!
+            #
+            # - anchor_idx: Scalar index of the anchor frame within the window
+            #   Typically = action_past_window_size (e.g., 0 if no past context)
+            #   This is the "current observation" frame t₀
+            #
+            # - rel_mode: String specifying the reference frame for relative actions
+            #   * "step": Compute frame-to-frame deltas Δ(t_i → t_{i+1})
+            #     Encodes how pose changes from each frame to its immediate successor
+            #     Example: If at frame 10, compute change from frame 10→11
+            #     This is the DEFAULT mode for training
+            #   
+            #   * "anchor": Compute deltas relative to anchor frame Δ(t₀ → t_{i+1})
+            #     All poses are expressed relative to the current observation
+            #     Example: If anchor is frame 10, compute 10→11, 10→12, ..., 10→25
+            #     Useful for long-horizon prediction from a fixed reference
+            #
+            # - action_type: String specifying pose representation format
+            #   * "angle": Use Euler angles (xyz convention) for finger joints
+            #     Output per hand: 51 dimensions = 3 (wrist_t) + 3 (wrist_R) + 45 (fingers)
+            #     This is the DEFAULT mode for compact neural network inputs
+            #   
+            #   * "keypoints": Use 3D joint positions in MANO canonical space
+            #     Output per hand: 66 dimensions = 3 (wrist_t) + 3 (wrist_R) + 63 (21 joints × 3)
+            #     Provides geometric interpretability but higher dimensionality
+            #
+            # PROCESSING PIPELINE (PER HAND):
+            # -------------------------------
+            # 1. Extract current and next-frame hand pose components:
+            #    - Wrist translation: t_cur, t_nxt (camera space)
+            #    - Wrist rotation: R_cur, R_nxt (3×3 matrices)
+            #    - Finger rotations: P_cur, P_nxt (15×3×3 matrices)
+            #    - Finger angles: pose_euler, pose_euler_next (45-dim Euler)
+            #    - Keypoints: joints_manospace, joints_manospace_next (21×3)
+            #    - Validity: kept, kept_next (boolean masks)
+            #
+            # 2. Compute ABSOLUTE actions (target poses at t+1):
+            #    
+            #    If action_type == "angle":
+            #      action_abs = [t_next, euler(R_next), finger_euler_next]
+            #      Shape: (W, 51) = (W, 3 + 3 + 45)
+            #    
+            #    If action_type == "keypoints":
+            #      action_abs = [t_next, euler(R_next), joints_next.flatten()]
+            #      Shape: (W, 66) = (W, 3 + 3 + 63)
+            #    
+            #    Components:
+            #    - Wrist translation at t+1: (3,) in camera space
+            #    - Wrist rotation at t+1: (3,) as Euler angles
+            #    - Finger configuration at t+1: (45,) Euler or (63,) keypoints
+            #
+            # 3. Compute RELATIVE actions (pose deltas):
+            #    
+            #    If rel_mode == "step" (frame-to-frame):
+            #      Δt = t_next - t_cur                    # Translation delta
+            #      ΔR = R_next @ R_cur^T                  # Rotation delta (composition)
+            #      ΔP = P_next @ P_cur^T                  # Finger rotation deltas (15 joints)
+            #      Δjoints = joints_next - joints_cur     # Keypoint deltas (if keypoints mode)
+            #      valid = kept & kept_next               # Both frames must be valid
+            #    
+            #    If rel_mode == "anchor" (anchor-relative):
+            #      Δt = t_next - t_anchor                 # Delta from anchor to next
+            #      ΔR = R_next @ R_anchor^T               # Rotation from anchor to next
+            #      ΔP = P_next @ P_anchor^T               # Finger deltas from anchor
+            #      Δjoints = joints_next - joints_anchor  # Keypoint deltas from anchor
+            #      valid = kept_next & kept[anchor_idx]   # Anchor and next must be valid
+            #    
+            #    Convert rotation deltas to Euler angles:
+            #      ΔP_euler = euler(ΔP)                   # (W, 45) Euler angle deltas
+            #    
+            #    Combine into action vector:
+            #      If action_type == "angle":
+            #        action_rel = [Δt, euler(ΔR), ΔP_euler]
+            #        Shape: (W, 51) = (W, 3 + 3 + 45)
+            #      
+            #      If action_type == "keypoints":
+            #        action_rel = [Δt, euler(ΔR), Δjoints.flatten()]
+            #        Shape: (W, 66) = (W, 3 + 3 + 63)
+            #
+            # 4. Apply validity masking:
+            #    - Set action_abs[~valid] = 0.0  (zero out invalid absolute actions)
+            #    - Set action_rel[~valid] = 0.0  (zero out invalid relative actions)
+            #    This prevents the model from learning from corrupted/extrapolated data
+            #
+            # OUTPUT TENSORS (PER HAND):
+            # -------------------------
+            # Left hand:
+            #   abs_L: (W, 51) or (W, 66) float32 - Absolute left hand pose actions
+            #   rel_L: (W, 51) or (W, 66) float32 - Relative left hand pose actions
+            #   msk_L: (W,) bool - Left hand action validity mask
+            #
+            # Right hand:
+            #   abs_R: (W, 51) or (W, 66) float32 - Absolute right hand pose actions
+            #   rel_R: (W, 51) or (W, 66) float32 - Relative right hand pose actions
+            #   msk_R: (W,) bool - Right hand action validity mask
+            #
+            # Action format (assuming action_type="angle", the default):
+            #   [wrist_t(3), wrist_R_euler(3), finger_joints(45)] = 51 dims per hand
+            #   
+            #   Represents:
+            #   - Wrist position change/target in camera space (meters)
+            #   - Wrist orientation change/target as Euler angles (radians)
+            #   - 15 finger joints × 3 Euler angles (radians)
+            #
+            # COORDINATE FRAME:
+            # ----------------
+            # All actions are in CAMERA SPACE (not world space):
+            # - Translations are in meters relative to camera origin
+            # - Rotations are relative to camera coordinate frame
+            # This camera-centric representation is critical for egocentric action
+            # prediction, as it makes poses invariant to global camera motion.
+            #
+            # DUAL-HAND COORDINATION:
+            # -----------------------
+            # By computing actions for both hands independently then concatenating,
+            # the model can learn:
+            # 1. Independent hand motions (e.g., left picks, right holds)
+            # 2. Coordinated bimanual tasks (e.g., both hands lift together)
+            # 3. Hand-specific timing (e.g., left starts before right)
+            #
+            # The text instruction guides which hand does what:
+            #   "Left hand: Pick up cup. Right hand: Hold plate."
+            # enables the model to associate text semantics with hand-specific actions.
+            #
+            # USAGE EXAMPLE:
+            # -------------
+            # Given:
+            #   - frame_id = 10, action_past_window_size = 0, action_future_window_size = 15
+            #   - idx_win_left = idx_win_right = [10, 11, 12, ..., 25] (W=16)
+            #   - idx_center = 0 (anchor is first frame in window)
+            #   - rel_mode = "step"
+            #   - action_type = "angle"
+            #
+            # Processing:
+            #   For left hand:
+            #     win_left contains paired poses:
+            #       pose_euler[0] = left hand at frame 10, pose_euler_next[0] = at frame 11
+            #       pose_euler[1] = at frame 11, pose_euler_next[1] = at frame 12
+            #       ...
+            #       pose_euler[15] = at frame 25, pose_euler_next[15] = at frame 26
+            #   
+            #   Similar for right hand in win_right
+            #
+            # Output:
+            #   abs_L[0] = absolute left hand pose at frame 11 (51 dims)
+            #   rel_L[0] = left hand pose delta from frame 10→11 (51 dims)
+            #   msk_L[0] = True if both frames 10 and 11 have valid left hand data
+            #   
+            #   abs_R[0] = absolute right hand pose at frame 11 (51 dims)
+            #   rel_R[0] = right hand pose delta from frame 10→11 (51 dims)
+            #   msk_R[0] = True if both frames 10 and 11 have valid right hand data
+            #   
+            #   ... (similarly for indices 1 through 15)
+            #
+            # These per-hand actions will be concatenated into:
+            #   action_abs = [abs_L, abs_R] (W, 102) - Combined absolute actions
+            #   action_rel = [rel_L, rel_R] (W, 102) - Combined relative actions
+            #   action_mask = [msk_L, msk_R] (W, 2) - Per-hand validity masks
+            #
+            # The model learns to predict:
+            #   Given: Current bimanual observation at frame t and text instruction
+            #   Predict: rel_L[i], rel_R[i] = Δpose for each hand to reach frame t+i+1
+            # ============================================================
+            """
             abs_L, rel_L, msk_L = self._make_action_window_vec(
                 win_left,  anchor_idx=idx_center, rel_mode=rel_mode, action_type=self.action_type
             ) # [16, 51] [16, 51] [16,]
@@ -1001,22 +1861,98 @@ class EpisodicDatasetCore(object):
             action_rel = np.concatenate([rel_L, rel_R], axis=1)   # (W,102)
             action_mask = np.stack([msk_L, msk_R], axis=1)        # (W,2)
 
+            """
+            # ============================================================
+            # 6. CONSTRUCT CURRENT STATE (MANO DUAL-HAND)
+            # ============================================================
+            # Builds the current observation state at anchor frame (frame_id).
+            # This represents "what the robot/model sees NOW" before predicting future actions.
+            #
+            # CRITICAL DISTINCTION: STATE vs ACTION
+            # =====================================
+            #
+            # **current_state**:
+            #   - TEMPORAL: Single timestep (snapshot at time t₀)
+            #   - CONTENT: Includes pose AND shape parameters (betas)
+            #   - FORMAT: Always ABSOLUTE pose in camera space
+            #   - PURPOSE: Current observation input to the model
+            #   - SHAPE: (122,) = 2 hands × 61 dims per hand
+            #     * Per hand: t_cam(3) + euler(R_cam)(3) + pose_euler(45) + betas(10) = 61
+            #
+            # **action_list**:
+            #   - TEMPORAL: Sequence of W timesteps (future trajectory from t₁ to t_W)
+            #   - CONTENT: Only pose parameters (NO betas - shape is constant per episode)
+            #   - FORMAT: Can be RELATIVE (deltas, default) or ABSOLUTE (target poses)
+            #   - PURPOSE: Target predictions for the model to learn
+            #   - SHAPE: (W, 102) = W timesteps × 2 hands × 51 dims per hand
+            #     * Per hand: t_cam(3) + euler(R_cam)(3) + pose_euler(45) = 51
+            #
+            # WHY ARE THEY DIFFERENT?
+            # -----------------------
+            # 1. **Shape parameters (betas)**:
+            #    - Included in STATE: Model needs to know hand size/shape to understand observations
+            #    - Excluded from ACTIONS: Hand shape is CONSTANT during an episode (doesn't change)
+            #      * Including betas in actions would be redundant (same 10 values repeated W times)
+            #      * Saves memory: 102 dims vs 122 dims per timestep
+            #
+            # 2. **Temporal dimension**:
+            #    - STATE is 1D: (122,) - Single snapshot "I see THIS hand configuration now"
+            #    - ACTIONS are 2D: (W, 102) - Trajectory "Move hands like THIS over next W frames"
+            #
+            # 3. **Absolute vs Relative**:
+            #    - STATE is always ABSOLUTE: "Hands are at position [x,y,z] with rotation [r,p,y]"
+            #    - ACTIONS can be RELATIVE: "Move hands by Δx, Δy, Δz with Δrotation"
+            #      * Relative actions are easier for neural networks to learn (smaller values)
+            #      * Enables compositional prediction: action_t+1 = f(state_t, Δaction)
+            #
+            # CONCRETE EXAMPLE:
+            # ----------------
+            # frame_id = 100, action_future_window_size = 15 (W=16)
+            #
+            # current_state (122 dims):
+            #   Left:  [0.25, 0.13, 0.45, 0.1, -0.2, 0.0, <45 finger angles>, <10 betas>]
+            #   Right: [0.30, 0.10, 0.50, 0.0,  0.1, 0.0, <45 finger angles>, <10 betas>]
+            #   → Represents: "At frame 100, left hand is at (0.25, 0.13, 0.45) with fingers curled"
+            #
+            # action_list (16, 102) - if use_rel=True:
+            #   Row 0:  [Left Δpose from frame 100→101, Right Δpose from frame 100→101]
+            #   Row 1:  [Left Δpose from frame 101→102, Right Δpose from frame 101→102]
+            #   ...
+            #   Row 15: [Left Δpose from frame 115→116, Right Δpose from frame 115→116]
+            #   → Represents: "To reach frame 101, move left hand by [+0.01, +0.02, -0.01, ...]"
+            #
+            # MODEL TRAINING:
+            # --------------
+            # Input:  current_state (122,) + image_list + instruction
+            # Output: Predict action_list (W, 102)
+            # Loss:   Compare predicted actions vs ground truth actions
+            # 
+            # At inference:
+            #   1. Observe current state at frame t
+            #   2. Model predicts future hand motions (actions)
+            #   3. Execute actions to control robot hands
+            #   4. Update state based on executed actions
+            #   5. Repeat for next timestep
+            # ============================================================
+            """
             cur_L = self._pack_state(win_left['R_cam'],
                         win_left['t_cam'],
                         win_left['pose_euler'] if self.action_type=='angle' else win_left['joints_manospace'].reshape(W, -1),
-                        idx_center) # [51]
+                        idx_center) # [3 + 3 + 45] = 51 dims (NO betas yet)
 
             cur_R = self._pack_state(win_right['R_cam'],
-                                win_right['t_cam'],
-                                win_right['pose_euler'] if self.action_type=='angle' else win_right['joints_manospace'].reshape(W, -1),
-                                idx_center) # [51]
+                        win_right['t_cam'],
+                        win_right['pose_euler'] if self.action_type=='angle' else win_right['joints_manospace'].reshape(W, -1),
+                        idx_center) # [3 + 3 + 45] = 51 dims (NO betas yet)
 
-            betas_L = epi['left']['beta']   # [10]
-            betas_R = epi['right']['beta']  # [10]
-
-            current_state       = np.concatenate([cur_L, betas_L, cur_R, betas_R]) # 2 * (6+action_dim+10,)
-            # current_state_mask  = np.array([msk_L[idx_center],
-            #                                 msk_R[idx_center]])
+            betas_L = epi['left']['beta']   # [10] - MANO shape parameters (constant per episode)
+            betas_R = epi['right']['beta']  # [10] - MANO shape parameters (constant per episode)
+                                                                                   
+            # Construct full state with shape parameters
+            # Left hand:  t_cam(3) + euler(R_cam)(3) + pose_euler(45) + betas(10) = 61 dims
+            # Right hand: t_cam(3) + euler(R_cam)(3) + pose_euler(45) + betas(10) = 61 dims
+            # Total: 122 dims
+            current_state       = np.concatenate([cur_L, betas_L, cur_R, betas_R]) # 2 * (3+3+45+10,) = 122
             current_state_mask  = np.array([win_left['kept'][idx_center], win_right['kept'][idx_center]]) # [2]
 
             # ------------------------------------------------------------------
@@ -1097,29 +2033,136 @@ class EpisodicDatasetCore(object):
 
             fov = calculate_fov( 2 * new_intrinsics[1][2], 2 * new_intrinsics[0][2], new_intrinsics) # [2]
 
+            """
+            # ============================================================
+            # 7. SELECT ACTION REPRESENTATION MODE (MANO dual-hand)
+            # ============================================================
+            # Same concept as SMPLX above, but for dual hands (left + right).
+            #
+            # At this point:
+            #   - action_rel: (W, 102) = [left_hand(51), right_hand(51)]
+            #   - action_abs: (W, 102) = [left_hand(51), right_hand(51)]
+            #
+            # Each hand has 51 dimensions:
+            #   [0:3]   - Translation (wrist position)
+            #   [3:6]   - Wrist rotation (Euler angles)
+            #   [6:51]  - Finger joint angles (45 dims = 15 joints × 3 Euler angles)
+            #
+            # WHY `//2` IS ESSENTIAL HERE:
+            # ---------------------------
+            # Unlike SMPLX, the `//2` operation is CRITICAL for MANO because:
+            #   1. action_rel and action_abs contain TWO hands concatenated
+            #   2. We need to FIRST separate left hand from right hand
+            #   3. THEN apply the hybrid logic (rel root + abs joints) to EACH hand
+            #
+            # Process:
+            #   Step 1: Split by //2 to separate hands
+            #     rel_L = action_rel[:, :51]   # Left hand relative actions
+            #     rel_R = action_rel[:, 51:]   # Right hand relative actions
+            #     abs_L = action_abs[:, :51]   # Left hand absolute actions
+            #     abs_R = action_abs[:, 51:]   # Right hand absolute actions
+            #
+            #   Step 2: For EACH hand, apply hybrid (relative root + absolute joints)
+            #     Left:  [rel_L[:, :6], abs_L[:, 6:]] = [Δt, ΔR, fingers_abs]
+            #     Right: [rel_R[:, :6], abs_R[:, 6:]] = [Δt, ΔR, fingers_abs]
+            #
+            #   Step 3: Concatenate both hands
+            #     action_list = [left_hybrid(51), right_hybrid(51)] = 102 dims
+            #
+            # So the [:, :6] slicing happens AFTER the //2 split, operating on
+            # each hand's 51-dim representation independently.
+            # ============================================================
+            """
             if self.use_rel:
                 action_list = action_rel
             else:
-                # use abs action for hand pose only
-                rel_L = action_rel[:, :action_rel.shape[1]//2] # [16, 51]
-                rel_R = action_rel[:, action_rel.shape[1]//2:] # [16, 51]
-                abs_L = action_abs[:, :action_abs.shape[1]//2] # [16, 51]
-                abs_R = action_abs[:, action_abs.shape[1]//2:] # [16, 51]
+                # use abs action for hand pose only (hybrid mode for dual hands)
+                
+                # Step 1: Split concatenated hands into left and right
+                rel_L = action_rel[:, :action_rel.shape[1]//2] # [16, 51] left hand
+                rel_R = action_rel[:, action_rel.shape[1]//2:] # [16, 51] right hand
+                abs_L = action_abs[:, :action_abs.shape[1]//2] # [16, 51] left hand
+                abs_R = action_abs[:, action_abs.shape[1]//2:] # [16, 51] right hand
 
-                action_list = np.concatenate([rel_L[:, :6], abs_L[:, 6:], rel_R[:, :6], abs_R[:, 6:]], axis=1) # [16, 102]
+                # Step 2 & 3: Apply hybrid logic to each hand, then concatenate
+                # For each hand: [relative_root(6), absolute_fingers(45)]
+                action_list = np.concatenate([
+                    rel_L[:, :6], abs_L[:, 6:],  # Left hand hybrid (51 dims)
+                    rel_R[:, :6], abs_R[:, 6:]   # Right hand hybrid (51 dims)
+                ], axis=1) # [16, 102] total
 
-            # ------------------------------------------------------------------
-            # 8. Return to caller
-            # ------------------------------------------------------------------
+            """
+            # ============================================================
+            # 8. PACKAGE RETURN DICTIONARY (MANO DUAL-HAND)
+            # ============================================================
+            # Returns a complete training sample containing:
+            #   - Current observation (state + images)
+            #   - Future trajectory to predict (actions)
+            #   - Task description (instruction)
+            #   - Camera parameters (intrinsics, fov)
+            #
+            # SUMMARY: STATE vs ACTION DIMENSIONS
+            # ===================================
+            #
+            # **current_state**: (122,) float32 - SINGLE TIMESTEP with SHAPE
+            #   Format: [left_hand(61), right_hand(61)]
+            #   Per hand breakdown:
+            #     - t_cam: (3,) wrist translation in camera space
+            #     - euler(R_cam): (3,) wrist rotation as Euler angles
+            #     - pose_euler: (45,) finger joint angles (15 joints × 3)
+            #     - betas: (10,) MANO shape parameters (PCA coefficients)
+            #   Total: 3 + 3 + 45 + 10 = 61 per hand × 2 hands = 122 dims
+            #
+            # **action_list**: (W, 102) float32 - W TIMESTEPS without SHAPE
+            #   Format: [left_hand(51), right_hand(51)] at each of W timesteps
+            #   Per hand breakdown (NO betas):
+            #     - t_cam: (3,) wrist translation (or Δt if relative)
+            #     - euler(R_cam): (3,) wrist rotation (or Δeuler if relative)
+            #     - pose_euler: (45,) finger angles (or Δpose if relative)
+            #   Total: 3 + 3 + 45 = 51 per hand × 2 hands = 102 dims per timestep
+            #   Across W timesteps: (W, 102)
+            #
+            # **current_state_mask**: (2,) bool - Per-hand validity at anchor frame
+            #   [left_valid, right_valid]
+            #   True if hand has valid MANO reconstruction at frame_id
+            #
+            # **action_mask**: (W, 2) bool - Per-hand validity across trajectory
+            #   [:, 0] = left hand validity for each of W timesteps
+            #   [:, 1] = right hand validity for each of W timesteps
+            #   True if both current AND next frame have valid hand data
+            #
+            # **instruction**: str - Natural language task description
+            #   Example: "Left hand: Pick up the cup. Right hand: Hold the plate."
+            #   Guides which hand performs which action
+            #
+            # **fov**: (2,) float32 - Field of view [fov_x, fov_y] in radians
+            #   Derived from camera intrinsics, used for perspective-aware prediction
+            #
+            # **intrinsics**: (3, 3) float32 - Camera intrinsic matrix K
+            #   [[fx,  0, cx],
+            #    [ 0, fy, cy],
+            #    [ 0,  0,  1]]
+            #   After augmentation/resizing, used for 3D-2D projection
+            #
+            # DOWNSTREAM PROCESSING:
+            # ---------------------
+            # This dict is passed to transform_trajectory() which:
+            #   1. Normalizes actions and states using dataset statistics
+            #   2. Pads to unified dimensions (action: 192, state: 212)
+            #   3. Converts to PyTorch tensors for model training
+            # ============================================================
+            """
 
+            # current_state: Model input (what the robot sees now)
+            # action_list: Model output (what the robot should do next)
             result_dict = dict(
-                instruction             = instruction,
-                action_list             = action_list,          # (W,2*51) float32
-                action_mask             = action_mask,          # (W,2)   bool
-                current_state           = current_state,        # (2*61,)  float32
-                current_state_mask      = current_state_mask,   # (2,) bool
-                fov                     = fov,                  # (2,) float32
-                intrinsics              = new_intrinsics,       # (3,3) float32
+                instruction             = instruction,          # str - "Left hand: ... Right hand: ..."
+                action_list             = action_list,          # (W, 102) float32 - future hand trajectory
+                action_mask             = action_mask,          # (W, 2) bool - per-hand validity per timestep
+                current_state           = current_state,        # (122,) float32 - current observation with shape
+                current_state_mask      = current_state_mask,   # (2,) bool - per-hand validity at anchor
+                fov                     = fov,                  # (2,) float32 - [fov_x, fov_y]
+                intrinsics              = new_intrinsics,       # (3, 3) float32 - camera intrinsics K
             )
             
             if image_list is not None:
@@ -1140,37 +2183,38 @@ class EpisodicDatasetCore(object):
         normalization: bool = True,
     ):
         """Pad action and state dimensions to match a unified size."""
-        action_np = sample_dict["action_list"]
-        state_np = sample_dict["current_state"]
+
+        action_np = sample_dict["action_list"]   # [16, 69] or [16, 102]
+        state_np  = sample_dict["current_state"] # [79] or [122]
        
-        action_dim = action_np.shape[1]
-        state_dim = state_np.shape[0]
+        action_dim = action_np.shape[1] # 69 for SMPLX, 102 for MANO dual-hand
+        state_dim  = state_np.shape[0]  # 79 for SMPLX, 122 for MANO dual-hand
         if normalization:
             # Normalize left and right hand actions and states separately
-            action_np = self.gaussian_normalizer.normalize_action(action_np)
-            state_np = self.gaussian_normalizer.normalize_state(state_np)
+            action_np = self.gaussian_normalizer.normalize_action(action_np)    # [16, 102]
+            state_np  = self.gaussian_normalizer.normalize_state(state_np)      # [122]
 
         # ===== Pad to unified dimensions =====
         unified_action_dim = ActionFeature.ALL_FEATURES[1]   # 192
-        unified_state_dim = StateFeature.ALL_FEATURES[1]     # 212
+        unified_state_dim  = StateFeature.ALL_FEATURES[1]    # 212
         unified_state, unified_state_mask = pad_state_human(
             state_np,
             sample_dict["current_state_mask"],
             action_dim,
             state_dim,
             unified_state_dim
-        )
+        ) # [212]
         unified_action, unified_action_mask = pad_action(
             action_np,
             sample_dict["action_mask"],
             action_dim,
             unified_action_dim
-        )
+        ) # [16, 192]
 
-        sample_dict["action_list"] = unified_action
-        sample_dict["action_mask"] = unified_action_mask
-        sample_dict["current_state"] = unified_state
-        sample_dict["current_state_mask"] = unified_state_mask
+        sample_dict["action_list"] = unified_action             # [16, 192]
+        sample_dict["action_mask"] = unified_action_mask        # [16, 192]
+        sample_dict["current_state"] = unified_state            # [212]
+        sample_dict["current_state_mask"] = unified_state_mask  # [212]
         return sample_dict
 
     def __getitem__(self, idx):
@@ -1244,7 +2288,9 @@ def pad_state_human(
 
     Args:
         current_state (Tensor): original state tensor, shape [state_dim]
-        current_state_mask (Tensor): per-hand state mask, shape [state_dim//2] or [state_dim]
+        current_state_mask (Tensor): per-entity state mask, shape [num_entities]
+            - For dual-hand MANO: shape (2,) for [left, right]
+            - For single-body SMPLX: shape (1,) for [body]
         action_dim (int): original action dimension
         state_dim (int): original state dimension
         unified_state_dim (int): target padded state dimension
@@ -1258,8 +2304,15 @@ def pad_state_human(
     current_state = torch.tensor(state, dtype=torch.float32)
     current_state_mask = torch.tensor(state_mask, dtype=torch.bool)
     
-    # Expand state mask from per-hand to per-dim
-    expanded_state_mask = current_state_mask.repeat_interleave(state_dim // 2)
+    num_entities = len(current_state_mask)  # 2 for MANO, 1 for SMPLX
+    
+    # Expand state mask from per-entity to per-dim
+    if num_entities == 1:
+        # Single-body case (SMPLX): Just expand to full state_dim
+        expanded_state_mask = current_state_mask.repeat_interleave(state_dim)  # (state_dim,)
+    else:
+        # Dual-hand case (MANO): Expand each hand mask to half state_dim
+        expanded_state_mask = current_state_mask.repeat_interleave(state_dim // num_entities)  # (state_dim,)
 
     # Mask out invalid state dimensions
     current_state_masked = current_state * expanded_state_mask.to(current_state.dtype)
@@ -1268,13 +2321,19 @@ def pad_state_human(
     padded_state = torch.zeros(unified_state_dim, dtype=current_state.dtype)
     padded_mask = torch.zeros(unified_state_dim, dtype=torch.bool)
 
-    # Fill first half of state_dim (left hand), skipping MANO betas
-    padded_state[:action_dim//2] = current_state_masked[:action_dim//2].clone()
-    padded_mask[:action_dim//2] = expanded_state_mask[:action_dim//2].clone()
+    if num_entities == 1:
+        # Single-body case: Fill directly without splitting
+        padded_state[:action_dim] = current_state_masked[:action_dim].clone()
+        padded_mask[:action_dim] = expanded_state_mask[:action_dim].clone()
+    else:
+        # Dual-hand case: Fill left and right hands separately (skip MANO betas)
+        # Fill first half of state_dim (left hand), skipping MANO betas
+        padded_state[:action_dim//2] = current_state_masked[:action_dim//2].clone()
+        padded_mask[:action_dim//2] = expanded_state_mask[:action_dim//2].clone()
 
-    # Fill second half of state_dim (right hand), skipping MANO betas
-    padded_state[action_dim//2:action_dim] = current_state_masked[state_dim//2:state_dim//2+action_dim//2].clone()
-    padded_mask[action_dim//2:action_dim] = expanded_state_mask[state_dim//2:state_dim//2+action_dim//2].clone()
+        # Fill second half of state_dim (right hand), skipping MANO betas
+        padded_state[action_dim//2:action_dim] = current_state_masked[state_dim//2:state_dim//2+action_dim//2].clone()
+        padded_mask[action_dim//2:action_dim] = expanded_state_mask[state_dim//2:state_dim//2+action_dim//2].clone()
 
     return padded_state, padded_mask
 
@@ -1289,7 +2348,9 @@ def pad_action(
 
     Args:
         actions (Tensor or None): original actions tensor, shape [T, action_dim] or None.
-        action_mask (Tensor): per-hand action mask, shape [T, 2].
+        action_mask (Tensor): per-entity action mask, shape [T, num_entities]
+            - For dual-hand MANO: shape [T, 2] for [left, right]
+            - For single-body SMPLX: shape [T, 1] for [body]
         action_dim (int): original action dimension.
         unified_action_dim (int): target padded actions dimension.
 
@@ -1301,10 +2362,17 @@ def pad_action(
     
     action_mask = torch.tensor(action_mask, dtype=torch.bool)
     
-    # Expand mask from per-hand to per-dimension
-    mask_left = action_mask[:, 0].unsqueeze(1).expand(-1, action_dim // 2)
-    mask_right = action_mask[:, 1].unsqueeze(1).expand(-1, action_dim // 2)
-    expanded_action_mask = torch.cat((mask_left, mask_right), dim=1)
+    num_entities = action_mask.shape[1]  # 2 for MANO, 1 for SMPLX
+    
+    # Expand mask from per-entity to per-dimension
+    if num_entities == 1:
+        # Single-body case (SMPLX): Expand single mask to full action_dim
+        expanded_action_mask = action_mask[:, 0].unsqueeze(1).expand(-1, action_dim)
+    else:
+        # Dual-hand case (MANO): Expand each hand mask to half action_dim
+        mask_left = action_mask[:, 0].unsqueeze(1).expand(-1, action_dim // 2)
+        mask_right = action_mask[:, 1].unsqueeze(1).expand(-1, action_dim // 2)
+        expanded_action_mask = torch.cat((mask_left, mask_right), dim=1)
 
     # ---------------------------
     # Case 1: actions is None

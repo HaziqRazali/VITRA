@@ -273,17 +273,23 @@ def read_dataset_statistics(statistics_path: str, default_value=1e-4) -> dict:
     with open(statistics_path, 'r') as file:
         dataset_stats = json.load(file)
         
-        if 'state_right' not in dataset_stats:
-
-            body_pose_mean = np.array(dataset_stats['body_pose']['mean'])
-            body_pose_std  = np.array(dataset_stats['body_pose']['std'])
-
+        # Check for new SMPLX format (single body with separate state/action)
+        if 'state' in dataset_stats and 'action' in dataset_stats:
+            # New SMPLX format with separate state and action statistics
+            state_mean  = np.array(dataset_stats['state']['mean'])  # [t_cam(3) + euler(R_cam)(3) + body_pose(63) + betas(10) = 79 dims]
+            state_std   = np.array(dataset_stats['state']['std'])   # [t_cam(3) + euler(R_cam)(3) + body_pose(63) + betas(10) = 79 dims]
+            action_mean = np.array(dataset_stats['action']['mean']) # [t_cam(3) + euler(R_cam)(3) + body_pose(63) = 69 dims (no betas)]
+            action_std  = np.array(dataset_stats['action']['std'])  # [t_cam(3) + euler(R_cam)(3) + body_pose(63) = 69 dims (no betas)]
+            
             data_statistics = {
-                'body_pose_mean': body_pose_mean,
-                'body_pose_std': body_pose_std,
+                'state_mean': state_mean,
+                'state_std': state_std,
+                'action_mean': action_mean,
+                'action_std': action_std,
             }
-
-        else:
+        
+        # MANO format (dual hands)
+        elif 'state_right' in dataset_stats:
         
             # Assert that right hand statistics must exist
             assert 'state_right' in dataset_stats, "Right hand statistics must exist"
@@ -316,36 +322,49 @@ def read_dataset_statistics(statistics_path: str, default_value=1e-4) -> dict:
                 'action_left_mean': action_left_mean,
                 'action_left_std': action_left_std,
             }
+        else:
+            raise ValueError(f"Unrecognized statistics format in {statistics_path}")
+            
     return data_statistics
 
 class GaussianNormalizer:
     """
     A class for normalizing and denormalizing state and action arrays.
-    Assumes state/action numpy arrays are concatenated as [left, right].
+    Handles both SMPLX (single body) and MANO (dual hands) formats.
     Accepts pre-loaded data_statistics dictionary.
     """
     def __init__(self, data_statistics: dict):
         """
         Args:
-            data_statistics (dict): pre-loaded statistics dictionary with keys:
+            data_statistics (dict): pre-loaded statistics dictionary.
+            
+            For SMPLX (single body):
+                'state_mean', 'state_std', 'action_mean', 'action_std'
+            
+            For MANO (dual hands):
                 'state_left_mean', 'state_left_std', 'state_right_mean', 'state_right_std',
                 'action_left_mean', 'action_left_std', 'action_right_mean', 'action_right_std'
-                All values are numpy arrays.
+            
+            All values are numpy arrays.
         """
 
-        if "state_right_mean" not in data_statistics:
+        # Check format: SMPLX vs MANO
+        if "state_mean" in data_statistics and "action_mean" in data_statistics:
+            # SMPLX format (single body)
+            self.state_mean = data_statistics['state_mean']
+            self.state_std  = data_statistics['state_std']
+            self.action_mean = data_statistics['action_mean']
+            self.action_std  = data_statistics['action_std']
 
-            # Body pose dataset
-            self.state_mean = data_statistics['body_pose_mean']
-            self.state_std = data_statistics['body_pose_std']
-
+        elif "state_right_mean" in data_statistics:
+            # MANO format (dual hands) - concatenate left and right
+            self.state_mean     = np.concatenate([data_statistics['state_left_mean'], data_statistics['state_right_mean']])
+            self.state_std      = np.concatenate([data_statistics['state_left_std'], data_statistics['state_right_std']])
+            self.action_mean    = np.concatenate([data_statistics['action_left_mean'], data_statistics['action_right_mean']])
+            self.action_std     = np.concatenate([data_statistics['action_left_std'], data_statistics['action_right_std']])
+        
         else:
-
-            # Concatenate left and right statistics for vectorized operations
-            self.state_mean = np.concatenate([data_statistics['state_left_mean'], data_statistics['state_right_mean']])
-            self.state_std = np.concatenate([data_statistics['state_left_std'], data_statistics['state_right_std']])
-            self.action_mean = np.concatenate([data_statistics['action_left_mean'], data_statistics['action_right_mean']])
-            self.action_std = np.concatenate([data_statistics['action_left_std'], data_statistics['action_right_std']])
+            raise ValueError(f"Unrecognized data_statistics format. Expected 'state_mean'/'action_mean' (SMPLX) or 'state_right_mean' (MANO)")
 
     # -----------------------------
     # State normalization
