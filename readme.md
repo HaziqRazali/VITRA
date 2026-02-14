@@ -1,3 +1,8 @@
+TTD:
+- (Running in server) Map human pose from the Motion-X dataset to robots in the GMR repo.
+- (Nizar) Parse URDF and IK config json files.
+- Modify VITRA to directly output robot pose and IK config.
+
 <div align="center">
 
 <h1 align="center"><span
