@@ -65,6 +65,8 @@ class EpisodicDatasetCore(object):
         image_future_window_size=0,
         rel_mode="step",
         load_images=True,
+        denoising_mode=False,
+        denoising_noise_std=0.05,
     ):
         self.video_root = video_root                                                # ./data/VITRA_1M/Video/Somethingsomething-v2_root
         annotation_dict = np.load(annotation_file, allow_pickle=True)               # ./data/VITRA_1M/Annotation/ssv2/episode_frame_index.npz
@@ -130,6 +132,11 @@ class EpisodicDatasetCore(object):
         self.image_future_window_size=image_future_window_size
         self.rel_mode=rel_mode
         self.load_images=load_images
+        # Denoising mode: action = clean pose at the SAME timestep as the state.
+        # State = noisy version (Gaussian noise added to the pose dims).
+        # Requires fwd_pred_next_n=1 and loss_type='smplx_denoising' in config.
+        self.denoising_mode = denoising_mode
+        self.denoising_noise_std = denoising_noise_std
     def __len__(self):
         return self.num_valid_frames
     
@@ -1265,7 +1272,14 @@ class EpisodicDatasetCore(object):
                         idx_center) # [3 + 3 + 63] = 69 dims
 
             betas = epi["smplx_params"]["shape"][frame_id]
-            current_state = np.concatenate([cur, betas])                    # (69,) single body state
+
+            # In denoising mode, inject Gaussian noise into the 69-dim pose (not betas)
+            # to create the noisy state input. Save the clean pose for the action target.
+            if self.denoising_mode:
+                cur_clean = cur.copy()
+                cur = cur + np.random.randn(*cur.shape).astype(np.float32) * self.denoising_noise_std
+
+            current_state = cur  # (69,) body pose only: t(3) + R(3) + joints(63), no betas
             current_state_mask  = np.array([win_body['kept'][idx_center]])  # (1,) single body mask
             
             # NOTE: The padding functions (pad_state_human, pad_action) now handle both
@@ -1384,10 +1398,15 @@ class EpisodicDatasetCore(object):
             # being fed to the model for training.
             # ============================================================
             """
-            if self.use_rel:
+            if self.denoising_mode:
+                # Denoising target: clean body pose at the SAME timestep (no betas).
+                # action_list shape: (1, 69) = [t(3), R(3), joints(63)]
+                # action_mask  shape: (1, 1)  - single timestep, single body
+                # NOTE: fwd_pred_next_n must be 1 and loss_type='smplx_denoising'.
+                action_list = cur_clean[np.newaxis, :].astype(np.float32)  # (1, 69)
+                action_mask = np.array([[win_body['kept'][idx_center]]], dtype=bool)                 # (1, 1)
+            elif self.use_rel:
                 action_list = action_rel
-
-            # goes in
             else:
                 # use abs action for body joint angles only (keep root relative)
                 rel = action_rel 

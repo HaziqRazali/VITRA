@@ -59,6 +59,9 @@ class DiffusionPolicy(nn.Module):
             self.loss_components = ActionFeature.get_loss_components(action_type)
         elif loss_type == 'robot':
             self.loss_components = ActionFeature.get_xhand_loss_components()
+        elif loss_type == 'smplx_denoising':
+            # SMPLX single-body denoising: 79-dim action (pose + betas, same timestep)
+            self.loss_components = ActionFeature.get_smplx_denoising_loss_components()
         else:
             raise ValueError(f"Unknown loss_type: {loss_type}")
         self.net = DiT_models[model_type](

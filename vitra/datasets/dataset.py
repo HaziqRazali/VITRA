@@ -28,7 +28,8 @@ class FrameDataset(Dataset):
     def __init__(self, dataset_folder, dataset_name,
                  image_past_window_size=0, image_future_window_size=0, action_past_window_size=0, action_future_window_size=0,
                  augmentation=False, normalization=True, processor=None, flip_augmentation=1.0, set_none_ratio=0.0,
-                 action_type="angle", use_rel=False, rel_mode='step', load_images=True, data_type='human', clip_len=None, state_mask_prob=0.1, target_image_height=224):
+                 action_type="angle", use_rel=False, rel_mode='step', load_images=True, data_type='human', clip_len=None, state_mask_prob=0.1, target_image_height=224,
+                 denoising_mode=False, denoising_noise_std=0.05):
         # only support image_past_window_size=0 now (in the post transform)
         """Both past and future window size does not include the current frame"""
         self.image_past_window_size = image_past_window_size
@@ -46,7 +47,8 @@ class FrameDataset(Dataset):
         self.action_type = action_type
         self.rel_mode = rel_mode # 'step'
         training_path = None
-        assert action_type == 'angle' and use_rel == False and rel_mode == 'step', "Please recalculate the statistics and update the path here with other action representations."
+        assert action_type == 'angle', "Only 'angle' action_type is currently supported."
+        assert not (use_rel and denoising_mode), "use_rel and denoising_mode are mutually exclusive."
         if dataset_name == 'ego4d_cooking_and_cleaning':
             annotation_file = os.path.join(dataset_folder, "Annotation/ego4d_cooking_and_cleaning/episode_frame_index.npz")
             label_folder = os.path.join(dataset_folder, "Annotation/ego4d_cooking_and_cleaning/episodic_annotations")
@@ -111,6 +113,8 @@ class FrameDataset(Dataset):
                 rel_mode=self.rel_mode,  # 'step'
                 load_images=self.load_images,
                 target_image_height = target_image_height,
+                denoising_mode=denoising_mode,
+                denoising_noise_std=denoising_noise_std,
             )
         else:
             self.episodic_dataset_core = RoboDatasetCore(
@@ -307,7 +311,8 @@ class MultipleWeightedDataset(Dataset):
     def load_datasets(cls, dataset_folder, data_mix,
                       image_past_window_size=0, image_future_window_size=0, action_past_window_size=0, action_future_window_size=0,
                       augmentation=False, normalization=True, processor = None, flip_augmentation=1.0, set_none_ratio=0.0,
-                      action_type="angle", use_rel=False, rel_mode='step', clip_len=None, state_mask_prob=0.1, target_image_height=224):
+                      action_type="angle", use_rel=False, rel_mode='step', clip_len=None, state_mask_prob=0.1, target_image_height=224,
+                      denoising_mode=False, denoising_noise_std=0.05):
         dataset_weight_list = []
         if data_mix in HAND_MIXTURES:
             dataset_weight_list = HAND_MIXTURES[data_mix]
@@ -328,7 +333,8 @@ class MultipleWeightedDataset(Dataset):
                                    image_past_window_size, image_future_window_size, 
                                    action_past_window_size, action_future_window_size,
                                    augmentation, normalization, processor, flip_augmentation, set_none_ratio,
-                                   action_type, use_rel, rel_mode, load_images=True, data_type=data_type, clip_len=clip_len, state_mask_prob=state_mask_prob, target_image_height=target_image_height)
+                                   action_type, use_rel, rel_mode, load_images=True, data_type=data_type, clip_len=clip_len, state_mask_prob=state_mask_prob, target_image_height=target_image_height,
+                                   denoising_mode=denoising_mode, denoising_noise_std=denoising_noise_std)
             datasets.append(dataset)
             weights.append(weight)
         data_statistics = cls.weighted_average_statistics(datasets, weights)

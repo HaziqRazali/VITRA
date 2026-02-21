@@ -51,6 +51,29 @@ class VITRA_Paligemma(nn.Module):
         elif self.action_type == 'keypoints':
             self.hand_dim = 69
 
+        # Relative action conversion at model level.
+        # When True the diffusion head is trained on relative deltas and inference
+        # adds back the current-state pose to recover absolute actions.
+        # Requires normalization=False in the dataset config (state and action
+        # statistics are measured on different representations so mixing them
+        # after normalization would be incorrect).
+        #
+        # rel_mode_at_model:
+        #   "anchor" – every predicted step is relative to the CURRENT frame:
+        #              action_rel[t] = action_abs[t] - current_state_pose
+        #              recover: action_abs[t] = action_rel[t] + current_state_pose
+        #   "step"   – consecutive step deltas:
+        #              action_rel[0] = action_abs[0] - current_state_pose
+        #              action_rel[t] = action_abs[t] - action_abs[t-1]  (t > 0)
+        #              recover: cumulative sum starting from current_state_pose
+        self.use_rel_at_model = self.configs.get('use_rel_at_model', False)
+        self.rel_mode_at_model = self.configs.get('rel_mode_at_model', 'anchor')
+        # The number of non-padding action dims in the padded action_labels tensor.
+        # MANO dual-hand angle: 2*51 = 102
+        # SMPLX single-body angle: 3+3+63 = 69
+        # Defaults to 2*hand_dim (= 102) so MANO configs need no change.
+        self.raw_action_dim = self.configs.get('raw_action_dim', 2 * self.hand_dim)
+
         # Initialize the tokenizer and VLM backbone
         self.tokenizer, self.backbone = self._init_backbone()
         if self.train_setup_configs is not None and self.train_setup_configs.get("reinit", False):
@@ -228,6 +251,34 @@ class VITRA_Paligemma(nn.Module):
         if mode == "train":
             actions_repeated = action_labels.unsqueeze(0).repeat(repeated_diffusion_steps, 1, 1, 1)
             actions_repeated = actions_repeated.view(B*repeated_diffusion_steps, action_labels.shape[1], action_labels.shape[2])
+
+            # --- relative action conversion (model-level) ---
+            # current_state_repeated: [B*R, 1, state_dim]
+            # After pad_state_human the first 2*hand_dim dims of the padded state
+            # are exactly the left+right pose (no betas), aligned with action dims.
+            if self.use_rel_at_model and current_state_repeated is not None:
+                action_dim = self.raw_action_dim  # 69 for SMPLX angle, 102 for MANO angle
+                # [B*R, raw_action_dim] – pose part of the anchor frame
+                # pad_state_human places the raw pose in state[0:raw_action_dim] (betas excluded)
+                anchor_pose = current_state_repeated[:, 0, :action_dim]  # [B*R, raw_action_dim]
+                actions_repeated = actions_repeated.clone()
+                if self.rel_mode_at_model == 'anchor':
+                    # all steps relative to current frame
+                    actions_repeated[:, :, :action_dim] = (
+                        actions_repeated[:, :, :action_dim] - anchor_pose.unsqueeze(1)
+                    )
+                elif self.rel_mode_at_model == 'step':
+                    # step-to-step deltas; step 0 is relative to anchor
+                    abs_actions = actions_repeated[:, :, :action_dim].clone()  # [B*R, T, raw_action_dim]
+                    prev = torch.cat([
+                        anchor_pose.unsqueeze(1),      # [B*R, 1, raw_action_dim] – previous of step 0
+                        abs_actions[:, :-1, :],         # [B*R, T-1, raw_action_dim] – previous of steps 1..T-1
+                    ], dim=1)                            # [B*R, T, raw_action_dim]
+                    actions_repeated[:, :, :action_dim] = abs_actions - prev
+                else:
+                    raise ValueError(f"Unknown rel_mode_at_model: {self.rel_mode_at_model}")
+            # -------------------------------------------------
+
             if self.use_state == 'DiT':
                 action_loss = self.act_model.loss(actions_repeated, action_features_repeated, action_masks_repeated, current_state_repeated, current_state_mask_repeated)
             else:
@@ -245,6 +296,24 @@ class VITRA_Paligemma(nn.Module):
                 num_ddim_steps,
                 action_masks_repeated, # ori x_mask
             )
+
+            # --- convert relative predictions back to absolute ---
+            if self.use_rel_at_model and current_state_repeated is not None:
+                action_dim = self.raw_action_dim  # 69 for SMPLX angle, 102 for MANO angle
+                anchor_pose = current_state_repeated[:, 0, :action_dim]  # [B*R, raw_action_dim]
+                if self.rel_mode_at_model == 'anchor':
+                    actions[:, :, :action_dim] = (
+                        actions[:, :, :action_dim] + anchor_pose.unsqueeze(1)
+                    )
+                elif self.rel_mode_at_model == 'step':
+                    # cumulative sum: x_abs[t] = anchor + sum(deltas[0..t])
+                    actions = actions.clone()
+                    actions[:, 0, :action_dim] = actions[:, 0, :action_dim] + anchor_pose
+                    for t in range(1, actions.shape[1]):
+                        actions[:, t, :action_dim] = (
+                            actions[:, t, :action_dim] + actions[:, t-1, :action_dim]
+                        )
+            # -----------------------------------------------------
 
             return actions, action_loss
 
