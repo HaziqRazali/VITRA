@@ -5,6 +5,12 @@
 		},
 		{
 			"path": "../../../media/haziq/Haziq/vitra"
+		},
+		{
+			"path": "../datasets/vitra"
+		},
+		{
+			"path": "../poseembroider"
 		}
 	]
 }
