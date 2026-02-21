@@ -22,10 +22,12 @@ class ActionFeature(object):
     PADDING_FEATURES = (102, 192)    # not used now
 
     # SMPLX single-body constants (used for denoising mode)
-    # Action (79 dims): t_cam(3) + euler(R_cam)(3) + body_pose(63) + betas(10)
+    # Full action (79 dims): t_cam(3) + euler(R_cam)(3) + body_pose(63) + betas(10)
     SMPLX_BODY_6D     = (0, 6)      # translation(3) + root rotation(3)
-    SMPLX_BODY_JOINTS = (6, 69)     # 21 body joints x 3 Euler angles
+    SMPLX_BODY_JOINTS = (6, 69)     # 21 body joints x 3 Euler angles (full layout)
     SMPLX_BODY_BETAS  = (69, 79)    # 10 MANO/SMPLX shape parameters
+    # Joints-only layout (body_6d stripped): action is 63-dim [joints(63)]
+    SMPLX_JOINTS_ONLY = (0, 63)     # 21 body joints x 3 Euler angles (no root trans/rot)
     @classmethod
     def get_concatenated_action_feature_from_dict(cls, action_feature_dict):
         """Concatenate action features from a dictionary into a single feature vector.
@@ -133,19 +135,17 @@ class ActionFeature(object):
 
     @classmethod
     def get_smplx_denoising_loss_components(cls):
-        """Get loss components for SMPLX single-body denoising (79-dim action including betas).
+        """Get loss components for SMPLX single-body denoising (joints-only, 63-dim action).
 
-        The model receives a noisy body pose as state and predicts the clean
-        body pose (same timestep) as the action target.
+        body_6d (root translation + rotation) is excluded from both the action
+        and state vectors. The model receives noisy body joints as state and
+        predicts clean body joints as the action target.
 
-        Action layout (79 dims):
-          [0:6]   body_6d     – root translation(3) + root rotation(3)
-          [6:69]  body_joints – 21 body joints x 3 Euler angles
-          [69:79] body_betas  – 10 SMPLX shape parameters
+        Action layout (63 dims, body_6d stripped):
+          [0:63]  body_joints – 21 body joints x 3 Euler angles
         """
         return {
-            'body_6d':     (*cls.SMPLX_BODY_6D,     1.0),
-            'body_joints': (*cls.SMPLX_BODY_JOINTS,  1.0),
+            'body_joints': (*cls.SMPLX_JOINTS_ONLY,  1.0),
         }
     
 

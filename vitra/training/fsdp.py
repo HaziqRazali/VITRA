@@ -716,13 +716,10 @@ class VLAFSDPStrategy(TrainingStrategy):
                     loss = prediction["loss"]
 
                     # Commit loss and backward
-                    metrics.commit(
-                        loss=loss, 
-                        left_hand_6d=prediction["left_hand_6d"],
-                        left_hand_joints=prediction["left_hand_joints"],
-                        right_hand_6d=prediction["right_hand_6d"],
-                        right_hand_joints=prediction["right_hand_joints"],
-                    )
+                    # Dynamically unpack all component losses so this works for any loss_type
+                    # (e.g. human: left/right_hand_6d/joints; smplx_denoising: body_joints)
+                    component_losses = {k: v for k, v in prediction.items() if k != "loss"}
+                    metrics.commit(loss=loss, **component_losses)
                     
                     normalized_loss = loss / self.grad_accumulation_steps
                     normalized_loss.backward()

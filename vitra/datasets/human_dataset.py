@@ -923,7 +923,12 @@ class EpisodicDatasetCore(object):
 
             main_type   = None
             sub_type    = None
-            instruction = epi["text"]["body"][frame_id]
+            text_body   = epi["text"]["body"]
+            if frame_id >= T:
+                print(len(text_body), T, frame_id)
+                sys.exit()
+            text_frame_id = min(frame_id, len(text_body) - 1)
+            instruction = text_body[text_frame_id]
 
             # only the body to consider so we can reuse
             idx_body    = idx_win
@@ -1279,7 +1284,12 @@ class EpisodicDatasetCore(object):
                 cur_clean = cur.copy()
                 cur = cur + np.random.randn(*cur.shape).astype(np.float32) * self.denoising_noise_std
 
-            current_state = cur  # (69,) body pose only: t(3) + R(3) + joints(63), no betas
+            # Strip body_6d (root trans+rot, dims 0:6) in denoising mode — joints only.
+            if self.denoising_mode:
+                cur       = cur[6:]        # (63,) joints only
+                cur_clean = cur_clean[6:]  # (63,) joints only
+
+            current_state = cur  # (63,) joints only in denoising mode, (69,) otherwise
             current_state_mask  = np.array([win_body['kept'][idx_center]])  # (1,) single body mask
             
             # NOTE: The padding functions (pad_state_human, pad_action) now handle both
@@ -1399,11 +1409,11 @@ class EpisodicDatasetCore(object):
             # ============================================================
             """
             if self.denoising_mode:
-                # Denoising target: clean body pose at the SAME timestep (no betas).
-                # action_list shape: (1, 69) = [t(3), R(3), joints(63)]
+                # Denoising target: clean body joints at the SAME timestep (body_6d stripped).
+                # action_list shape: (1, 63) = [joints(63)]  — root trans/rot excluded
                 # action_mask  shape: (1, 1)  - single timestep, single body
                 # NOTE: fwd_pred_next_n must be 1 and loss_type='smplx_denoising'.
-                action_list = cur_clean[np.newaxis, :].astype(np.float32)  # (1, 69)
+                action_list = cur_clean[np.newaxis, :].astype(np.float32)  # (1, 63) joints only (body_6d stripped)
                 action_mask = np.array([[win_body['kept'][idx_center]]], dtype=bool)                 # (1, 1)
             elif self.use_rel:
                 action_list = action_rel
