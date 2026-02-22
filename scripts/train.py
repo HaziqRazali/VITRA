@@ -178,6 +178,8 @@ def experiment(variant):
         clip_len=variant["train_dataset"].get('clip_len', None),
         state_mask_prob=variant["train_dataset"].get('state_mask_prob', 0.1),
         target_image_height=variant["train_dataset"].get('target_image_height', 224),
+        denoising_mode=variant["train_dataset"].get('denoising_mode', False),
+        denoising_noise_std=variant["train_dataset"].get('denoising_noise_std', 0.05),
     )
     
     # # DEBUG: verify batch sizes and shapes (remove after debugging)

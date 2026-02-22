@@ -678,6 +678,7 @@ class EpisodicDatasetCore(object):
 
             # ---------- read images --------------------
             # Retry mechanism: try up to 3 times to load video frames
+            imgs = None
             for attempt in range(3):
                 try:
                     imgs, _ = load_video_decord(video_path, frame_index=decode_ids, rotation=False)
@@ -687,6 +688,9 @@ class EpisodicDatasetCore(object):
                     #     raise  # Raise the exception after 3 failed attempts
                     print(f"Warning: failed to load video frames from {video_path} (attempt {attempt+1}/3): {e}")
                     time.sleep(0.1)
+
+            if imgs is None:
+                raise RuntimeError(f"Failed to load video after 3 attempts: {video_path}")
 
             images = np.stack(imgs, axis=0)           # (L,H,W,3) uint8
             mask   = ~oob                             # (L,) bool
@@ -718,6 +722,7 @@ class EpisodicDatasetCore(object):
 
             # ---------- read images --------------------
             # Retry mechanism: try up to 3 times to load video frames
+            imgs = None
             for attempt in range(3):
                 try:
                     imgs, _ = load_video_decord(video_path, frame_index=decode_ids, rotation=False)
@@ -727,6 +732,9 @@ class EpisodicDatasetCore(object):
                     #     raise  # Raise the exception after 3 failed attempts
                     print(f"Warning: failed to load video frames from {video_path} (attempt {attempt+1}/3): {e}")
                     time.sleep(0.1)
+
+            if imgs is None:
+                raise RuntimeError(f"Failed to load video after 3 attempts: {video_path}")
 
             images = np.stack(imgs, axis=0)           # (1, 240, 360, 3) (L,H,W,3) uint8
             mask   = ~oob                             # (L,) bool
@@ -925,7 +933,7 @@ class EpisodicDatasetCore(object):
             sub_type    = None
             text_body   = epi["text"]["body"]
             if frame_id >= T:
-                print(len(text_body), T, frame_id)
+                print(episode_id, len(text_body), T, frame_id)
                 sys.exit()
             text_frame_id = min(frame_id, len(text_body) - 1)
             instruction = text_body[text_frame_id]

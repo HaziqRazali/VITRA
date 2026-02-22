@@ -135,7 +135,19 @@ class FrameDataset(Dataset):
     def __getitem__(self, idx):
 
         # it enters file:///home/haziq/VITRA/vitra/datasets/human_dataset.py EpisodicDatasetCore.__getitem__()
-        sample = self.episodic_dataset_core.__getitem__(idx)
+        # If a sample's video is corrupted, skip it and pick a different random idx.
+        # Each idx maps through index_frame_pair -> episode_id + frame_id -> full annotation + video,
+        # so any valid idx yields a properly paired sample.
+        max_retries = 10
+        for _retry in range(max_retries):
+            try:
+                sample = self.episodic_dataset_core.__getitem__(idx)
+                break
+            except Exception as e:
+                print(f"Warning: skipping corrupted sample idx={idx} (retry {_retry+1}/{max_retries}): {e}")
+                idx = random.randint(0, len(self.episodic_dataset_core) - 1)
+        else:
+            raise RuntimeError(f"Failed to load any valid sample after {max_retries} retries.")
         sample = self.episodic_dataset_core.transform_trajectory(sample, self.normalization) if self.load_images else sample
         return self.post_transform(sample) if self.load_images else sample
 
